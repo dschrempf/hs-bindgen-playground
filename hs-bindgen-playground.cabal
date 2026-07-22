@@ -1,0 +1,29 @@
+cabal-version:      3.0
+name:               hs-bindgen-playground
+version:            0.1.0
+synopsis:           Web playground for hs-bindgen: paste a C header, get Haskell bindings.
+license:            BSD-3-Clause
+author:             Dominik Schrempf
+maintainer:         dominik@well-typed.com
+build-type:         Simple
+
+executable hs-bindgen-playground
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    default-language: GHC2021
+    ghc-options:      -Wall -threaded -rtsopts "-with-rtsopts=-N"
+    build-depends:
+        , base          >=4.16 && <5
+        , aeson
+        , bytestring
+        , directory
+        , filepath
+        , http-types
+        , process
+        , scotty
+        , stm
+        , temporary
+        , text
+        , wai
+        , wai-extra
+        , warp

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>hs-bindgen playground</title>
+  <link rel="stylesheet" href="/static/vendor/codemirror.min.css" />
+  <link rel="stylesheet" href="/static/vendor/hljs-theme.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>hs-bindgen playground</h1>
+    <p class="tagline">Paste a C header, get Haskell bindings.
+      <a href="https://github.com/well-typed/hs-bindgen">hs-bindgen</a></p>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main>
+    <section class="pane pane-input">
+      <div class="controls">
+        <label>Example
+          <select id="examples"><option value="">— pick an example —</option></select>
+        </label>
+        <label>C standard
+          <select id="std">
+            <option>c89</option>
+            <option>c99</option>
+            <option selected>c11</option>
+            <option>c17</option>
+            <option>c23</option>
+          </select>
+        </label>
+        <label>Foreign import
+          <select id="safe">
+            <option value="safe" selected>safe</option>
+            <option value="unsafe">unsafe</option>
+          </select>
+        </label>
+        <label>Module
+          <input id="module" type="text" value="Demo" spellcheck="false" />
+        </label>
+      </div>
+      <textarea id="source" spellcheck="false"></textarea>
+      <button id="generate">Generate bindings</button>
+    </section>
+
+    <section class="pane pane-output">
+      <nav class="tabs">
+        <button class="tab active" data-tab="bindings">Bindings</button>
+        <button class="tab" data-tab="diagnostics">Diagnostics</button>
+        <button class="tab" data-tab="command">Command</button>
+      </nav>
+
+      <div class="tab-panel active" data-panel="bindings">
+        <button class="copy" data-copy="bindings-code">Copy</button>
+        <pre><code id="bindings-code" class="language-haskell"></code></pre>
+      </div>
+      <div class="tab-panel" data-panel="diagnostics">
+        <pre><code id="diagnostics-code"></code></pre>
+      </div>
+      <div class="tab-panel" data-panel="command">
+        <button class="copy" data-copy="command-code">Copy</button>
+        <pre><code id="command-code"></code></pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/vendor/codemirror.min.js"></script>
+  <script src="/static/vendor/clike.min.js"></script>
+  <script src="/static/vendor/highlight.min.js"></script>
+  <script src="/static/vendor/haskell.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
