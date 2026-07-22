@@ -92,6 +92,10 @@ async function generate() {
     if (data.ok) {
       bindings.textContent = data.bindings || "";
       bindings.className = "language-haskell";
+      // For reasons of performance, highlight.js has a safeguard to avoid
+      // elements being highlighted multiple times. However, in our case we need
+      // to highlight again when we generate the code again.
+      bindings.removeAttribute('data-highlighted');
       hljs.highlightElement(bindings);
       showTab("bindings");
     } else {
