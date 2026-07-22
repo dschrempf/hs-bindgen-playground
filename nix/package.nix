@@ -1,13 +1,12 @@
-{ lib
-, haskellPackages
-, makeWrapper
-, stdenv
-, bubblewrap
-, coreutils
-, util-linux
-, llvmPackages_21
-, doxygen
-, hsBindgenCli
+{
+  lib,
+  haskellPackages,
+  makeWrapper,
+  stdenv,
+  bubblewrap,
+  coreutils,
+  util-linux,
+  hsBindgenCli,
 }:
 
 let
@@ -15,18 +14,16 @@ let
   server = haskellPackages.callCabal2nix "hs-bindgen-playground" ../. { };
 
   # Everything the server shells out to at runtime, incl. inside the sandbox:
-  #   bwrap/timeout/prlimit — spawn+confine the CLI;
-  #   clang — version-matched binary the CLI needs to reparse macros;
-  #   doxygen — documentation-comment generation.
-  # The server forwards its own PATH into the bwrap sandbox, so all of these
-  # must be here (they live in /nix/store, which the sandbox binds read-only).
+  # bwrap/timeout/prlimit — spawn+confine the CLI. The CLI wrapper puts its own
+  # version-matched clang and doxygen on PATH, so we no longer add them here.
+  # The server forwards its PATH into the bwrap sandbox; the whole /nix/store is
+  # bound read-only, so the CLI's clang/doxygen (part of its closure) are
+  # reachable there too.
   runtimeDeps = [
     hsBindgenCli
     bubblewrap
     coreutils
     util-linux
-    llvmPackages_21.clang
-    doxygen
   ];
 in
 stdenv.mkDerivation {

@@ -12,9 +12,17 @@
   };
 
   outputs =
-    { self, nixpkgs, hs-bindgen, disko }:
+    {
+      self,
+      nixpkgs,
+      hs-bindgen,
+      disko,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
       cliFor = system: hs-bindgen.packages.${system}.hs-bindgen-cli;
@@ -56,8 +64,7 @@
               pkgs.bubblewrap
               pkgs.coreutils
               pkgs.util-linux
-              pkgs.llvmPackages_21.clang
-              pkgs.doxygen
+              # clang + doxygen come bundled on the CLI wrapper's PATH.
               (cliFor system)
             ];
           };
@@ -69,13 +76,11 @@
       # The integration test is a nixosTest, so it runs on any Linux natively.
       # `nix flake check` only builds the current system's checks, so on x86 CI
       # it never tries to build the aarch64 VM (which x86 can't do anyway).
-      checks = forAllSystems (
-        system: {
-          integration = (pkgsFor system).callPackage ./nix/test.nix {
-            module = self.nixosModules.default;
-          };
-        }
-      );
+      checks = forAllSystems (system: {
+        integration = (pkgsFor system).callPackage ./nix/test.nix {
+          module = self.nixosModules.default;
+        };
+      });
 
       # Example deployment host for nixos-anywhere; see nix/hetzner.nix.
       nixosConfigurations.hetzner = nixpkgs.lib.nixosSystem {

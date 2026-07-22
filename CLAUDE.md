@@ -7,7 +7,7 @@ inside a bubblewrap sandbox. Deployed with Nix.
 ## Commands
 
 ```sh
-nix develop            # toolchain: ghc, cabal, hs-bindgen-cli, bwrap, clang, doxygen
+nix develop            # toolchain: ghc, cabal, hs-bindgen-cli (bundles clang+doxygen), bwrap
 cabal run              # fast iteration; or `nix run .#` for the fully-wrapped binary
 (cd app && ghc -fno-code -Wall Main.hs)   # quickest typecheck (deps are in the dev shell)
 nix build .#packages.x86_64-linux.default # wrapped server (validates package.nix)
@@ -32,9 +32,12 @@ nix flake check                           # eval everything + run the test
   argument and require `--single-file` — use `--single-file --safe ''`. Output is a
   written file (`<Module>.hs`), not stdout; diagnostics go to stderr. Always pass
   `--unique-id` or it warns.
-- **Sandbox needs a matching `clang` binary and `doxygen` on PATH**, not just libclang:
-  clang (`llvmPackages_21.clang`, the exact version the CLI references) for macro reparsing,
-  doxygen for doc comments. Both are in `package.nix`'s `runtimeDeps` and forwarded into bwrap.
+- **The CLI needs a matching `clang` binary and `doxygen` on PATH** (not just libclang):
+  clang for macro reparsing, doxygen for doc comments. As of the current pin these are
+  bundled on the CLI wrapper's own PATH (with a matching `BINDGEN_EXTRA_CLANG_ARGS`), so
+  this flake no longer adds them. They're in the CLI's closure, hence reachable inside
+  bwrap (which binds all of `/nix/store` read-only). If a future bump drops the bundling,
+  re-add version-matched `clang`+`doxygen` to `package.nix`'s `runtimeDeps`.
 - **systemd hardening vs bwrap** (in `module.nix`): `RestrictAddressFamilies` must include
   `AF_NETLINK` (bwrap loopback), and never set `ProtectKernelTunables`/`ProtectControlGroups`/
   `ProtectProc`/`RestrictNamespaces`/a `SystemCallFilter` blocking clone/unshare/mount — they
