@@ -83,6 +83,8 @@ main {
   color: var(--fg);
 }
 .controls label.check input { width: auto; }
+.controls label.wide { flex: 1 1 100%; }
+.controls label.wide input { width: 100%; }
 
 .pane-input .CodeMirror {
   flex: 1;

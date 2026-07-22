@@ -83,6 +83,7 @@ async function generate() {
         module: $("module").value.trim() || "Demo",
         verbosity: parseInt($("verbosity").value, 10),
         macroWarnings: $("macroWarnings").checked,
+        options: $("options").value,
       }),
     });
     const data = await res.json();

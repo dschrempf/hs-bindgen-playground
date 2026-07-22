@@ -10,7 +10,7 @@ import Control.Monad (when)
 import Data.Aeson
   (FromJSON (..), Value, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
-import Data.Char (isAlphaNum, isUpper)
+import Data.Char (isAlphaNum, isSpace, isUpper)
 import Data.List (sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -59,6 +59,7 @@ data GenReq = GenReq
   , reqModule :: Text
   , reqVerbosity :: Maybe Int  -- ^ 0–4; 'Nothing' falls back to 'cfgVerbosity'.
   , reqMacroWarnings :: Bool
+  , reqExtraOpts :: Text  -- ^ free-form extra @preprocess@ options (quote-aware).
   }
 
 instance FromJSON GenReq where
@@ -70,6 +71,7 @@ instance FromJSON GenReq where
       <*> o .:? "module" .!= "Demo"
       <*> o .:? "verbosity"
       <*> o .:? "macroWarnings" .!= True
+      <*> o .:? "options" .!= ""
 
 -- | Result of a successful (or failed-but-ran) generation.
 data GenResult = GenResult
@@ -164,6 +166,8 @@ validate req
       Left $ "Unsupported C standard: " <> reqStd req <> "."
   | not (validVerbosity (reqVerbosity req)) =
       Left "Verbosity must be between 0 and 4."
+  | T.length (reqExtraOpts req) > maxOptionsLen =
+      Left $ "Additional options too long (limit " <> tshow maxOptionsLen <> " chars)."
   | otherwise = Right req
   where
     validModule m =
@@ -246,6 +250,22 @@ buildArgv cfg req work ownPath =
 effVerbosity :: Config -> GenReq -> Int
 effVerbosity cfg req = fromMaybe (cfgVerbosity cfg) (reqVerbosity req)
 
+-- | Split a free-form option string into argv, honouring single/double quotes
+-- (which group and are stripped). No shell involved — args go straight to
+-- 'readProcessWithExitCode' — so there is nothing to escape and no injection.
+splitArgs :: Text -> [String]
+splitArgs = go . T.unpack
+  where
+    go s = case dropWhile isSpace s of
+      "" -> []
+      s' -> let (tok, rest) = lexTok "" s' in tok : go rest
+    lexTok acc [] = (acc, [])
+    lexTok acc (c : cs)
+      | isSpace c = (acc, cs)
+      | c == '"' || c == '\'' =
+          let (q, rest) = break (== c) cs in lexTok (acc ++ q) (drop 1 rest)
+      | otherwise = lexTok (acc ++ [c]) cs
+
 -- | The CLI arguments (also mirrored by 'displayCommand', minus paths).
 cliArgs :: Config -> GenReq -> [String]
 cliArgs cfg req =
@@ -261,9 +281,9 @@ cliArgs cfg req =
   , "--create-output-dirs"
   , "--overwrite-files"
   , "--clang-option=-std=" <> T.unpack (reqStd req)
-  , "-I", "/work"
-  , "input.h"
   ]
+    ++ splitArgs (reqExtraOpts req)
+    ++ ["-I", "/work", "input.h"]
 
 -- | A human-readable, copy-pasteable version of the CLI command for the UI.
 -- Paths are shown relative (@out@, @.@) rather than the sandbox @\/work@ ones.
@@ -279,8 +299,9 @@ displayCommand cfg req =
       , "--module " <> T.unpack (reqModule req)
       , "--hs-output-dir out --create-output-dirs --overwrite-files"
       , "--clang-option=-std=" <> T.unpack (reqStd req)
-      , "-I . input.h"
       ]
+    ++ [opts | let opts = T.strip (reqExtraOpts req), not (T.null opts)]
+    ++ ["-I . input.h"]
 
 -- Serving static assets -----------------------------------------------------
 
@@ -358,11 +379,12 @@ loadExamples dir = do
 
 -- Small utilities -----------------------------------------------------------
 
-maxBindings, maxDiagnostics, maxFileSize, maxLineLen :: Int
+maxBindings, maxDiagnostics, maxFileSize, maxLineLen, maxOptionsLen :: Int
 maxBindings = 512 * 1024
 maxDiagnostics = 64 * 1024
 maxFileSize = 16 * 1024 * 1024
 maxLineLen = 1000  -- -v4 can emit multi-MB single lines (serialised AST dumps).
+maxOptionsLen = 512
 
 truncateText :: Int -> Text -> Text
 truncateText n t
