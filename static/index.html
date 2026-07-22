@@ -38,6 +38,19 @@
             <option value="unsafe">unsafe</option>
           </select>
         </label>
+        <label>Verbosity
+          <select id="verbosity">
+            <option value="0">0 — error</option>
+            <option value="1">1 — warning</option>
+            <option value="2" selected>2 — notice</option>
+            <option value="3">3 — info</option>
+            <option value="4">4 — debug</option>
+          </select>
+        </label>
+        <label class="check">
+          <input id="macroWarnings" type="checkbox" checked />
+          Macro warnings
+        </label>
         <label>Module
           <input id="module" type="text" value="Demo" spellcheck="false" />
         </label>

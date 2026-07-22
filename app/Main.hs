@@ -57,6 +57,8 @@ data GenReq = GenReq
   , reqStd :: Text
   , reqSafe :: Bool
   , reqModule :: Text
+  , reqVerbosity :: Maybe Int  -- ^ 0–4; 'Nothing' falls back to 'cfgVerbosity'.
+  , reqMacroWarnings :: Bool
   }
 
 instance FromJSON GenReq where
@@ -66,6 +68,8 @@ instance FromJSON GenReq where
       <*> o .:? "std" .!= "c11"
       <*> o .:? "safe" .!= True
       <*> o .:? "module" .!= "Demo"
+      <*> o .:? "verbosity"
+      <*> o .:? "macroWarnings" .!= True
 
 -- | Result of a successful (or failed-but-ran) generation.
 data GenResult = GenResult
@@ -158,12 +162,16 @@ validate req
       Left "Module name must start with an uppercase letter and contain only letters, digits, or underscores."
   | reqStd req `notElem` allowedStds =
       Left $ "Unsupported C standard: " <> reqStd req <> "."
+  | not (validVerbosity (reqVerbosity req)) =
+      Left "Verbosity must be between 0 and 4."
   | otherwise = Right req
   where
     validModule m =
       not (T.null m)
         && isUpper (T.head m)
         && T.all (\c -> isAlphaNum c || c == '_') m
+    validVerbosity Nothing = True
+    validVerbosity (Just v) = v >= 0 && v <= 4
 
 allowedStds :: [Text]
 allowedStds = ["c89", "c99", "c11", "c17", "c23"]
@@ -184,7 +192,7 @@ runGenerate cfg req =
     bindings <- if haveOut then TIO.readFile outFile else pure ""
     let ran = ec == ExitSuccess && haveOut
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
-        diag = annotateTimeout code (T.pack err)
+        diag = trimLines maxLineLen (annotateTimeout code (T.pack err))
     pure
       GenResult
         { resOk = ran
@@ -234,11 +242,17 @@ buildArgv cfg req work ownPath =
       , "--chdir", "/work"
       ]
 
+-- | Effective verbosity: request wins, else the configured default.
+effVerbosity :: Config -> GenReq -> Int
+effVerbosity cfg req = fromMaybe (cfgVerbosity cfg) (reqVerbosity req)
+
 -- | The CLI arguments (also mirrored by 'displayCommand', minus paths).
 cliArgs :: Config -> GenReq -> [String]
 cliArgs cfg req =
-  [ "-v", show (cfgVerbosity cfg)
-  , "preprocess"
+  ["-v", show (effVerbosity cfg req)]
+    ++ ["--log-enable-macro-warnings" | reqMacroWarnings req]
+    ++
+  [ "preprocess"
   , "--single-file"
   , if reqSafe req then "--safe" else "--unsafe", ""
   , "--unique-id", "playground.hs-bindgen"
@@ -257,7 +271,9 @@ displayCommand :: Config -> GenReq -> Text
 displayCommand cfg req =
   T.intercalate " \\\n  " $
     map T.pack
-      [ "hs-bindgen-cli -v " <> show (cfgVerbosity cfg) <> " preprocess"
+      [ "hs-bindgen-cli -v " <> show (effVerbosity cfg req)
+          <> (if reqMacroWarnings req then " --log-enable-macro-warnings" else "")
+          <> " preprocess"
       , "--single-file " <> (if reqSafe req then "--safe" else "--unsafe") <> " ''"
       , "--unique-id playground.hs-bindgen"
       , "--module " <> T.unpack (reqModule req)
@@ -342,15 +358,24 @@ loadExamples dir = do
 
 -- Small utilities -----------------------------------------------------------
 
-maxBindings, maxDiagnostics, maxFileSize :: Int
+maxBindings, maxDiagnostics, maxFileSize, maxLineLen :: Int
 maxBindings = 512 * 1024
 maxDiagnostics = 64 * 1024
 maxFileSize = 16 * 1024 * 1024
+maxLineLen = 1000  -- -v4 can emit multi-MB single lines (serialised AST dumps).
 
 truncateText :: Int -> Text -> Text
 truncateText n t
   | T.length t <= n = t
   | otherwise = T.take n t <> "\n… (truncated)"
+
+-- | Cap each line, so one pathological line can't dominate the diagnostics.
+trimLines :: Int -> Text -> Text
+trimLines n = T.intercalate "\n" . map trim . T.lines
+  where
+    trim l
+      | T.length l <= n = l
+      | otherwise = T.take n l <> " …"
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

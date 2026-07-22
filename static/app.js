@@ -81,6 +81,8 @@ async function generate() {
         std: $("std").value,
         safe: $("safe").value === "safe",
         module: $("module").value.trim() || "Demo",
+        verbosity: parseInt($("verbosity").value, 10),
+        macroWarnings: $("macroWarnings").checked,
       }),
     });
     const data = await res.json();

@@ -76,6 +76,13 @@ main {
   font: inherit;
 }
 .controls input { width: 8rem; }
+.controls label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--fg);
+}
+.controls label.check input { width: auto; }
 
 .pane-input .CodeMirror {
   flex: 1;
