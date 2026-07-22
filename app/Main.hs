@@ -8,24 +8,35 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
 import Control.Exception (IOException, finally)
-import qualified Control.Exception as E
+import Control.Exception qualified as E
 import Control.Monad (when)
 import Data.Aeson
-  (FromJSON (..), Value, object, withObject, (.!=), (.:), (.:?), (.=))
-import qualified Data.ByteString as BS
+  ( FromJSON (..),
+    Value,
+    object,
+    withObject,
+    (.!=),
+    (.:),
+    (.:?),
+    (.=),
+  )
+import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum, isSpace, isUpper)
 import Data.List (sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error (lenientDecode)
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.IO as TIO
+import Data.Text.IO qualified as TIO
+import Data.Text.Lazy qualified as TL
 import Network.HTTP.Types (status403, status413, status503)
 import Network.Wai (pathInfo)
 import System.Directory
-  (createDirectoryIfMissing, doesFileExist, listDirectory)
+  ( createDirectoryIfMissing,
+    doesFileExist,
+    listDirectory,
+  )
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
@@ -34,44 +45,47 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.IO (closeFd, dup, fdToHandle)
 import System.Posix.Terminal (openPseudoTerminal)
 import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , waitForProcess
+  ( CreateProcess (..),
+    StdStream (..),
+    createProcess,
+    proc,
+    waitForProcess,
   )
 import Web.Scotty
 
 -- | Runtime configuration, all from the environment (see 'loadConfig').
 data Config = Config
-  { cfgPort :: Int
-  , cfgStaticDir :: FilePath
-  , cfgExamplesDir :: FilePath
-  , cfgCli :: String
-  , cfgMaxConcurrent :: Int
-  , cfgMaxInputBytes :: Int
-  , cfgTimeoutSecs :: Int
-  , cfgMemBytes :: Integer  -- ^ prlimit --as (address space)
-  , cfgVerbosity :: Int
-  , cfgReadOnly :: Bool
-  , cfgReadOnlyMsg :: Text
+  { cfgPort :: Int,
+    cfgStaticDir :: FilePath,
+    cfgExamplesDir :: FilePath,
+    cfgCli :: String,
+    cfgMaxConcurrent :: Int,
+    cfgMaxInputBytes :: Int,
+    cfgTimeoutSecs :: Int,
+    -- | prlimit --as (address space)
+    cfgMemBytes :: Integer,
+    cfgVerbosity :: Int,
+    cfgReadOnly :: Bool,
+    cfgReadOnlyMsg :: Text
   }
 
 -- | A curated example header shown in the UI dropdown.
 data Example = Example
-  { exName :: Text
-  , exBody :: Text
+  { exName :: Text,
+    exBody :: Text
   }
 
 -- | A parsed generation request from the frontend.
 data GenReq = GenReq
-  { reqSource :: Text
-  , reqStd :: Text
-  , reqSafe :: Bool
-  , reqModule :: Text
-  , reqVerbosity :: Maybe Int  -- ^ 0–4; 'Nothing' falls back to 'cfgVerbosity'.
-  , reqMacroWarnings :: Bool
-  , reqExtraOpts :: Text  -- ^ free-form extra @preprocess@ options (quote-aware).
+  { reqSource :: Text,
+    reqStd :: Text,
+    reqSafe :: Bool,
+    reqModule :: Text,
+    -- | 0–4; 'Nothing' falls back to 'cfgVerbosity'.
+    reqVerbosity :: Maybe Int,
+    reqMacroWarnings :: Bool,
+    -- | free-form extra @preprocess@ options (quote-aware).
+    reqExtraOpts :: Text
   }
 
 instance FromJSON GenReq where
@@ -87,11 +101,11 @@ instance FromJSON GenReq where
 
 -- | Result of a successful (or failed-but-ran) generation.
 data GenResult = GenResult
-  { resOk :: Bool
-  , resBindings :: Text
-  , resCommand :: Text
-  , resDiagnostics :: Text
-  , resExitCode :: Int
+  { resOk :: Bool,
+    resBindings :: Text,
+    resCommand :: Text,
+    resDiagnostics :: Text,
+    resExitCode :: Int
   }
 
 -- | A bounded concurrency gate: at most N requests generate at once.
@@ -119,7 +133,8 @@ main = do
   -- and "localhost" is wrong there (caddy serves the real domain on 80/443).
   interactive <- hIsTerminalDevice stdout
   when interactive $
-    putStrLn $ "hs-bindgen playground: http://localhost:" <> show (cfgPort cfg) <> "/"
+    putStrLn $
+      "hs-bindgen playground: http://localhost:" <> show (cfgPort cfg) <> "/"
   scotty (cfgPort cfg) $ do
     get "/" $ do
       setHeader "Content-Type" "text/html; charset=utf-8"
@@ -130,8 +145,8 @@ main = do
     get "/api/config" $
       json $
         object
-          [ "readOnly" .= cfgReadOnly cfg
-          , "message" .= cfgReadOnlyMsg cfg
+          [ "readOnly" .= cfgReadOnly cfg,
+            "message" .= cfgReadOnlyMsg cfg
           ]
 
     get "/api/examples" $
@@ -214,16 +229,17 @@ runGenerate cfg req =
         diag = trimLines (annotateTimeout code (stripCR out))
     pure
       GenResult
-        { resOk = ran
-        , resBindings = truncateText maxBindings bindings
-        , resCommand = displayCommand cfg req
-        , resDiagnostics = diag
-        , resExitCode = code
+        { resOk = ran,
+          resBindings = truncateText maxBindings bindings,
+          resCommand = displayCommand cfg req,
+          resDiagnostics = diag,
+          resExitCode = code
         }
   where
     -- timeout kills with SIGKILL → exit 128+9.
     annotateTimeout 137 d =
-      d <> "\n[playground] Killed: exceeded the "
+      d
+        <> "\n[playground] Killed: exceeded the "
         <> tshow (cfgTimeoutSecs cfg)
         <> "s time limit."
     annotateTimeout _ d = d
@@ -232,12 +248,12 @@ runGenerate cfg req =
 buildArgv :: Config -> GenReq -> FilePath -> String -> [String]
 buildArgv cfg req work ownPath =
   ["--signal=KILL", show (cfgTimeoutSecs cfg) <> "s"]
-    ++ [ "prlimit"
-       , "--as=" <> show (cfgMemBytes cfg)
-       , "--cpu=" <> show (cfgTimeoutSecs cfg)
-       , "--fsize=" <> show maxFileSize
-       , "--nofile=256"
-       , "--"
+    ++ [ "prlimit",
+         "--as=" <> show (cfgMemBytes cfg),
+         "--cpu=" <> show (cfgTimeoutSecs cfg),
+         "--fsize=" <> show maxFileSize,
+         "--nofile=256",
+         "--"
        ]
     ++ ["bwrap"]
     ++ bwrapArgs
@@ -246,20 +262,36 @@ buildArgv cfg req work ownPath =
     ++ cliArgs cfg req
   where
     bwrapArgs =
-      [ "--unshare-all"
-      , "--die-with-parent"
-      , "--new-session"
-      , "--clearenv"
-      , "--setenv", "PATH", ownPath
-      , "--setenv", "TMPDIR", "/tmp"
-      , "--setenv", "HOME", "/work"
-      , "--setenv", "TERM", "xterm-256color"  -- enable ANSI-coloured diagnostics
-      , "--ro-bind", "/nix/store", "/nix/store"
-      , "--proc", "/proc"
-      , "--dev", "/dev"
-      , "--tmpfs", "/tmp"
-      , "--bind", work, "/work"
-      , "--chdir", "/work"
+      [ "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+        "--setenv",
+        "PATH",
+        ownPath,
+        "--setenv",
+        "TMPDIR",
+        "/tmp",
+        "--setenv",
+        "HOME",
+        "/work",
+        "--setenv",
+        "TERM",
+        "xterm-256color", -- enable ANSI-coloured diagnostics
+        "--ro-bind",
+        "/nix/store",
+        "/nix/store",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--bind",
+        work,
+        "/work",
+        "--chdir",
+        "/work"
       ]
 
 -- | Run @cmd args@ with its std streams on a fresh pseudo-terminal, returning
@@ -284,10 +316,10 @@ runOnPty cmd args = do
   (_, _, _, ph) <-
     createProcess
       (proc cmd args)
-        { std_in = NoStream
-        , std_out = UseHandle hOut
-        , std_err = UseHandle hErr
-        , close_fds = True
+        { std_in = NoStream,
+          std_out = UseHandle hOut,
+          std_err = UseHandle hErr,
+          close_fds = True
         }
   ec <- waitForProcess ph
   out <- takeMVar outVar
@@ -329,17 +361,20 @@ cliArgs :: Config -> GenReq -> [String]
 cliArgs cfg req =
   ["-v", show (effVerbosity cfg req)]
     ++ ["--log-enable-macro-warnings" | reqMacroWarnings req]
-    ++
-  [ "preprocess"
-  , "--single-file"
-  , if reqSafe req then "--safe" else "--unsafe", ""
-  , "--unique-id", "playground.hs-bindgen"
-  , "--module", T.unpack (reqModule req)
-  , "--hs-output-dir", "/work/out"
-  , "--create-output-dirs"
-  , "--overwrite-files"
-  , "--clang-option=-std=" <> T.unpack (reqStd req)
-  ]
+    ++ [ "preprocess",
+         "--single-file",
+         if reqSafe req then "--safe" else "--unsafe",
+         "",
+         "--unique-id",
+         "playground.hs-bindgen",
+         "--module",
+         T.unpack (reqModule req),
+         "--hs-output-dir",
+         "/work/out",
+         "--create-output-dirs",
+         "--overwrite-files",
+         "--clang-option=-std=" <> T.unpack (reqStd req)
+       ]
     ++ splitArgs (reqExtraOpts req)
     ++ ["-I", "/work", "input.h"]
 
@@ -348,18 +383,20 @@ cliArgs cfg req =
 displayCommand :: Config -> GenReq -> Text
 displayCommand cfg req =
   T.intercalate " \\\n  " $
-    map T.pack
-      [ "hs-bindgen-cli -v " <> show (effVerbosity cfg req)
+    map
+      T.pack
+      [ "hs-bindgen-cli -v "
+          <> show (effVerbosity cfg req)
           <> (if reqMacroWarnings req then " --log-enable-macro-warnings" else "")
-          <> " preprocess"
-      , "--single-file " <> (if reqSafe req then "--safe" else "--unsafe") <> " ''"
-      , "--unique-id playground.hs-bindgen"
-      , "--module " <> T.unpack (reqModule req)
-      , "--hs-output-dir out --create-output-dirs --overwrite-files"
-      , "--clang-option=-std=" <> T.unpack (reqStd req)
+          <> " preprocess",
+        "--single-file " <> (if reqSafe req then "--safe" else "--unsafe") <> " ''",
+        "--unique-id playground.hs-bindgen",
+        "--module " <> T.unpack (reqModule req),
+        "--hs-output-dir out --create-output-dirs --overwrite-files",
+        "--clang-option=-std=" <> T.unpack (reqStd req)
       ]
-    ++ [opts | let opts = T.strip (reqExtraOpts req), not (T.null opts)]
-    ++ ["-I . input.h"]
+      ++ [opts | let opts = T.strip (reqExtraOpts req), not (T.null opts)]
+      ++ ["-I . input.h"]
 
 -- Serving static assets -----------------------------------------------------
 
@@ -395,11 +432,11 @@ errObj msg = object ["ok" .= False, "error" .= msg, "diagnostics" .= msg]
 resultObj :: GenResult -> Value
 resultObj r =
   object
-    [ "ok" .= resOk r
-    , "bindings" .= resBindings r
-    , "command" .= resCommand r
-    , "diagnostics" .= resDiagnostics r
-    , "exitCode" .= resExitCode r
+    [ "ok" .= resOk r,
+      "bindings" .= resBindings r,
+      "command" .= resCommand r,
+      "diagnostics" .= resDiagnostics r,
+      "exitCode" .= resExitCode r
     ]
 
 -- Config / examples ---------------------------------------------------------
@@ -440,8 +477,8 @@ loadExamples dir = do
 maxBindings, maxFileSize, maxLineLen, maxLines, maxOptionsLen :: Int
 maxBindings = 512 * 1024
 maxFileSize = 16 * 1024 * 1024
-maxLineLen = 1000    -- -v4 can emit multi-MB single lines (serialised AST dumps),
-maxLines = 10000     -- and very many of them; cap the count, but keep every line otherwise.
+maxLineLen = 1000 -- -v4 can emit multi-MB single lines (serialised AST dumps),
+maxLines = 10000 -- and very many of them; cap the count, but keep every line otherwise.
 maxOptionsLen = 512
 
 -- | Drop carriage returns: the PTY turns @\\n@ into @\\r\\n@ on output.
@@ -467,9 +504,9 @@ trimLines t = T.intercalate "\n" (map trim shown <> note)
       | otherwise = ["… (" <> tshow dropped <> " more lines truncated)"]
     trim l
       | T.length l <= maxLineLen = l
-      | otherwise = T.take maxLineLen l <> " …"
+      | otherwise = T.take maxLineLen l <> " … (truncated) "
 
-tshow :: Show a => a -> Text
+tshow :: (Show a) => a -> Text
 tshow = T.pack . show
 
 envInt :: String -> Int -> IO Int
