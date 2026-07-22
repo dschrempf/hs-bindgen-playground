@@ -16,9 +16,25 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
+    import base64, json
+
     machine.wait_for_unit("hs-bindgen-playground.service")
     machine.wait_for_unit("caddy.service")
     machine.wait_for_open_port(80)
+
+    # Every shipped example must generate bindings — the exact set the UI serves.
+    examples = json.loads(machine.succeed("curl -sS http://localhost/api/examples"))
+    assert examples, "server served no examples"
+    for ex in examples:
+        payload = json.dumps({"source": ex["body"], "module": "Example"})
+        b64 = base64.b64encode(payload.encode()).decode()
+        machine.succeed(f"echo {b64} | base64 -d > /tmp/req.json")
+        out = machine.succeed(
+            "curl -sS -X POST http://localhost/api/generate "
+            + "-H 'Content-Type: application/json' --data @/tmp/req.json"
+        )
+        assert json.loads(out).get("ok") is True, f"example {ex['name']!r} failed: {out}"
+    print(f"generated bindings for {len(examples)} examples")
 
     # A struct must generate a record with a Storable instance.
     out = machine.succeed(
