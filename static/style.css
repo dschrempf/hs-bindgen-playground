@@ -156,4 +156,13 @@ main {
 }
 .copy:hover { border-color: var(--accent); }
 
-.diag-error { color: var(--error); }
+/* ANSI SGR colours for diagnostics (see renderDiagnostics in app.js). */
+.ansi-bold { font-weight: 600; }
+.ansi-30, .ansi-90 { color: #6c7086; } /* black / bright black */
+.ansi-31, .ansi-91 { color: #f38ba8; } /* red     — Error   */
+.ansi-32, .ansi-92 { color: #a6e3a1; } /* green   — Info    */
+.ansi-33, .ansi-93 { color: #f9e2af; } /* yellow  — Warning/Notice */
+.ansi-34, .ansi-94 { color: #89b4fa; } /* blue    */
+.ansi-35, .ansi-95 { color: #cba6f7; } /* magenta */
+.ansi-36, .ansi-96 { color: #94e2d5; } /* cyan    */
+.ansi-37, .ansi-97 { color: #cdd6f4; } /* white   — Debug   */

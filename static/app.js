@@ -23,6 +23,44 @@ function showTab(name) {
   document.querySelector(`.tab[data-tab="${name}"]`).click();
 }
 
+// --- Diagnostics colouring ------------------------------------------------
+// The server runs hs-bindgen-cli on a pseudo-terminal so it emits its usual
+// ANSI-coloured diagnostics; we parse the SGR escapes into styled spans. Only
+// foreground colour and bold are used (`.ansi-*` classes in style.css).
+function renderDiagnostics(text) {
+  const code = $("diagnostics-code");
+  const frag = document.createDocumentFragment();
+  const re = /\x1b\[([0-9;]*)m/g;
+  let last = 0, fg = null, bold = false, m;
+  const emit = (s) => {
+    if (!s) return;
+    const span = document.createElement("span");
+    const cls = [fg, bold ? "ansi-bold" : null].filter(Boolean);
+    if (cls.length) span.className = cls.join(" ");
+    span.textContent = s;
+    frag.appendChild(span);
+  };
+  while ((m = re.exec(text)) !== null) {
+    emit(text.slice(last, m.index));
+    last = re.lastIndex;
+    for (const p of (m[1] || "0").split(";")) {
+      const n = parseInt(p || "0", 10);
+      if (n === 0) { fg = null; bold = false; }
+      else if (n === 1) bold = true;
+      else if (n === 22) bold = false;
+      else if (n === 39) fg = null;
+      else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) fg = "ansi-" + n;
+    }
+  }
+  emit(text.slice(last));
+  code.replaceChildren(frag);
+}
+
+// Show a plain (non-ANSI) message, e.g. a client-side error, tinted as an error.
+function showDiagnosticsError(text) {
+  renderDiagnostics("\x1b[91;1m" + text + "\x1b[m");
+}
+
 // --- Copy buttons ---------------------------------------------------------
 document.querySelectorAll(".copy").forEach((btn) => {
   btn.addEventListener("click", async () => {
@@ -70,7 +108,6 @@ async function generate() {
   btn.disabled = true;
   btn.textContent = "Generating…";
   const bindings = $("bindings-code");
-  const diagnostics = $("diagnostics-code");
   const command = $("command-code");
   try {
     const res = await fetch("/api/generate", {
@@ -89,8 +126,7 @@ async function generate() {
     const data = await res.json();
 
     command.textContent = data.command || "";
-    diagnostics.textContent = data.diagnostics || "(no diagnostics)";
-    diagnostics.classList.toggle("diag-error", !data.ok);
+    renderDiagnostics(data.diagnostics || "(no diagnostics)");
 
     if (data.ok) {
       bindings.textContent = data.bindings || "";
@@ -106,12 +142,11 @@ async function generate() {
       showTab("diagnostics");
     }
     if (res.status === 503 && !data.diagnostics) {
-      diagnostics.textContent = data.error || "Server busy — try again.";
+      showDiagnosticsError(data.error || "Server busy — try again.");
       showTab("diagnostics");
     }
   } catch (err) {
-    diagnostics.textContent = "Request failed: " + err;
-    diagnostics.classList.add("diag-error");
+    showDiagnosticsError("Request failed: " + err);
     showTab("diagnostics");
   } finally {
     btn.disabled = false;

@@ -4,8 +4,11 @@
 -- @hs-bindgen-cli@ inside a bubblewrap sandbox and returns generated bindings.
 module Main (main) where
 
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
-import Control.Exception (finally)
+import Control.Exception (IOException, finally)
+import qualified Control.Exception as E
 import Control.Monad (when)
 import Data.Aeson
   (FromJSON (..), Value, object, withObject, (.!=), (.:), (.:?), (.=))
@@ -16,6 +19,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Text.Encoding.Error (lenientDecode)
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.IO as TIO
 import Network.HTTP.Types (status403, status413, status503)
@@ -25,9 +29,17 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
-import System.IO (hIsTerminalDevice, stdout)
+import System.IO (Handle, hClose, hIsTerminalDevice, stdout)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Process (readProcessWithExitCode)
+import System.Posix.IO (closeFd, dup, fdToHandle)
+import System.Posix.Terminal (openPseudoTerminal)
+import System.Process
+  ( CreateProcess (..)
+  , StdStream (..)
+  , createProcess
+  , proc
+  , waitForProcess
+  )
 import Web.Scotty
 
 -- | Runtime configuration, all from the environment (see 'loadConfig').
@@ -191,12 +203,15 @@ runGenerate cfg req =
     TIO.writeFile (work </> "input.h") (reqSource req)
     ownPath <- getEnv "PATH"
     let sandboxArgs = buildArgv cfg req work ownPath
-    (ec, _out, err) <- readProcessWithExitCode "timeout" sandboxArgs ""
+    -- Run on a pseudo-terminal so the CLI thinks it is interactive and emits
+    -- ANSI-coloured diagnostics (the frontend renders the escapes). Diagnostics
+    -- go to stderr, which the PTY merges with (empty) stdout.
+    (ec, out) <- runOnPty "timeout" sandboxArgs
     haveOut <- doesFileExist outFile
     bindings <- if haveOut then TIO.readFile outFile else pure ""
     let ran = ec == ExitSuccess && haveOut
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
-        diag = trimLines maxLineLen (annotateTimeout code (T.pack err))
+        diag = trimLines maxLineLen (annotateTimeout code (stripCR out))
     pure
       GenResult
         { resOk = ran
@@ -238,6 +253,7 @@ buildArgv cfg req work ownPath =
       , "--setenv", "PATH", ownPath
       , "--setenv", "TMPDIR", "/tmp"
       , "--setenv", "HOME", "/work"
+      , "--setenv", "TERM", "xterm-256color"  -- enable ANSI-coloured diagnostics
       , "--ro-bind", "/nix/store", "/nix/store"
       , "--proc", "/proc"
       , "--dev", "/dev"
@@ -246,13 +262,55 @@ buildArgv cfg req work ownPath =
       , "--chdir", "/work"
       ]
 
+-- | Run @cmd args@ with its std streams on a fresh pseudo-terminal, returning
+-- the exit code and everything written to it. A PTY makes the child (and the
+-- sandboxed CLI at the end of the chain) see a terminal on stderr, so it emits
+-- ANSI colours. Stdout and stderr both land on the slave; a reader thread
+-- drains the master concurrently to avoid the tiny PTY buffer deadlocking.
+runOnPty :: String -> [String] -> IO (ExitCode, Text)
+runOnPty cmd args = do
+  (master, slave) <- openPseudoTerminal
+  -- The child needs the slave on fds 1 and 2; give each a private dup so
+  -- 'System.Process' can close them independently after the fork. Once the
+  -- parent holds no slave fd, the master reads EOF/EIO when the child exits.
+  slaveOut <- dup slave
+  slaveErr <- dup slave
+  closeFd slave
+  masterH <- fdToHandle master
+  hOut <- fdToHandle slaveOut
+  hErr <- fdToHandle slaveErr
+  outVar <- newEmptyMVar
+  _ <- forkIO (drainHandle masterH >>= putMVar outVar)
+  (_, _, _, ph) <-
+    createProcess
+      (proc cmd args)
+        { std_in = NoStream
+        , std_out = UseHandle hOut
+        , std_err = UseHandle hErr
+        , close_fds = True
+        }
+  ec <- waitForProcess ph
+  out <- takeMVar outVar
+  pure (ec, out)
+
+-- | Read a handle to EOF, treating the PTY master's EIO-on-close as end of
+-- input, and decode leniently as UTF-8. Closes the handle when done.
+drainHandle :: Handle -> IO Text
+drainHandle h = (TE.decodeUtf8With lenientDecode . BS.concat <$> go []) `finally` hClose h
+  where
+    go acc = do
+      chunk <- (Just <$> BS.hGetSome h 65536) `E.catch` \(_ :: IOException) -> pure Nothing
+      case chunk of
+        Just c | not (BS.null c) -> go (c : acc)
+        _ -> pure (reverse acc)
+
 -- | Effective verbosity: request wins, else the configured default.
 effVerbosity :: Config -> GenReq -> Int
 effVerbosity cfg req = fromMaybe (cfgVerbosity cfg) (reqVerbosity req)
 
 -- | Split a free-form option string into argv, honouring single/double quotes
 -- (which group and are stripped). No shell involved — args go straight to
--- 'readProcessWithExitCode' — so there is nothing to escape and no injection.
+-- 'createProcess' as an argv list — so there is nothing to escape and no injection.
 splitArgs :: Text -> [String]
 splitArgs = go . T.unpack
   where
@@ -385,6 +443,10 @@ maxDiagnostics = 64 * 1024
 maxFileSize = 16 * 1024 * 1024
 maxLineLen = 1000  -- -v4 can emit multi-MB single lines (serialised AST dumps).
 maxOptionsLen = 512
+
+-- | Drop carriage returns: the PTY turns @\\n@ into @\\r\\n@ on output.
+stripCR :: Text -> Text
+stripCR = T.filter (/= '\r')
 
 truncateText :: Int -> Text -> Text
 truncateText n t

@@ -24,6 +24,7 @@ executable hs-bindgen-playground
         , stm
         , temporary
         , text
+        , unix
         , wai
         , wai-extra
         , warp
