@@ -43,7 +43,10 @@ nix flake check                           # eval everything + run the test
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
   `nix flake update hs-bindgen`.
-- `checks` is x86_64-linux only (the aarch64 VM test can't build on x86).
+- `checks.integration` (the nixosTest) is defined for both Linux systems; it's
+  Linux-only because it VM-tests systemd + bwrap. `nix flake check` builds only the
+  current system's check (warns it "omitted incompatible systems: aarch64-linux" on
+  x86), so CI on x86 never tries to build the aarch64 VM.
 
 ## User's global rules (see ~/.claude/CLAUDE.md)
 

@@ -66,11 +66,16 @@
 
       nixosModules.default = import ./nix/module.nix self;
 
-      # The integration test is a nixosTest (x86_64-linux; the deployment target).
-      checks.x86_64-linux.integration =
-        (pkgsFor "x86_64-linux").callPackage ./nix/test.nix {
-          module = self.nixosModules.default;
-        };
+      # The integration test is a nixosTest, so it runs on any Linux natively.
+      # `nix flake check` only builds the current system's checks, so on x86 CI
+      # it never tries to build the aarch64 VM (which x86 can't do anyway).
+      checks = forAllSystems (
+        system: {
+          integration = (pkgsFor system).callPackage ./nix/test.nix {
+            module = self.nixosModules.default;
+          };
+        }
+      );
 
       # Example deployment host for nixos-anywhere; see nix/hetzner.nix.
       nixosConfigurations.hetzner = nixpkgs.lib.nixosSystem {
