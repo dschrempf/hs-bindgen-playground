@@ -211,13 +211,13 @@ runGenerate cfg req =
     bindings <- if haveOut then TIO.readFile outFile else pure ""
     let ran = ec == ExitSuccess && haveOut
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
-        diag = trimLines maxLineLen (annotateTimeout code (stripCR out))
+        diag = trimLines (annotateTimeout code (stripCR out))
     pure
       GenResult
         { resOk = ran
         , resBindings = truncateText maxBindings bindings
         , resCommand = displayCommand cfg req
-        , resDiagnostics = truncateText maxDiagnostics diag
+        , resDiagnostics = diag
         , resExitCode = code
         }
   where
@@ -437,11 +437,11 @@ loadExamples dir = do
 
 -- Small utilities -----------------------------------------------------------
 
-maxBindings, maxDiagnostics, maxFileSize, maxLineLen, maxOptionsLen :: Int
+maxBindings, maxFileSize, maxLineLen, maxLines, maxOptionsLen :: Int
 maxBindings = 512 * 1024
-maxDiagnostics = 64 * 1024
 maxFileSize = 16 * 1024 * 1024
-maxLineLen = 1000  -- -v4 can emit multi-MB single lines (serialised AST dumps).
+maxLineLen = 1000    -- -v4 can emit multi-MB single lines (serialised AST dumps),
+maxLines = 10000     -- and very many of them; cap the count, but keep every line otherwise.
 maxOptionsLen = 512
 
 -- | Drop carriage returns: the PTY turns @\\n@ into @\\r\\n@ on output.
@@ -453,13 +453,21 @@ truncateText n t
   | T.length t <= n = t
   | otherwise = T.take n t <> "\n… (truncated)"
 
--- | Cap each line, so one pathological line can't dominate the diagnostics.
-trimLines :: Int -> Text -> Text
-trimLines n = T.intercalate "\n" . map trim . T.lines
+-- | Truncate over-long lines and cap the total line count, so a pathological
+-- line (or a multi-MB -v4 dump) can't dominate the diagnostics — but every line
+-- within the count is shown, rather than the whole buffer being cut mid-output.
+trimLines :: Text -> Text
+trimLines t = T.intercalate "\n" (map trim shown <> note)
   where
+    ls = T.lines t
+    shown = take maxLines ls
+    dropped = length ls - length shown
+    note
+      | dropped <= 0 = []
+      | otherwise = ["… (" <> tshow dropped <> " more lines truncated)"]
     trim l
-      | T.length l <= n = l
-      | otherwise = T.take n l <> " …"
+      | T.length l <= maxLineLen = l
+      | otherwise = T.take maxLineLen l <> " …"
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
