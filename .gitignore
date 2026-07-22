@@ -1,5 +1,13 @@
+# Nix
+
+/.direnv/
+
 /result
 /result-*
+
+# Haskell
+
 /dist-newstyle/
+
 *.hi
 *.o
