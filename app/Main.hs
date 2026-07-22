@@ -6,6 +6,7 @@ module Main (main) where
 
 import Control.Concurrent.STM
 import Control.Exception (finally)
+import Control.Monad (when)
 import Data.Aeson
   (FromJSON (..), Value, object, withObject, (.!=), (.:), (.:?), (.=))
 import qualified Data.ByteString as BS
@@ -24,6 +25,7 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
+import System.IO (hIsTerminalDevice, stdout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Web.Scotty
@@ -95,6 +97,11 @@ main = do
   cfg <- loadConfig
   gate <- newGate (cfgMaxConcurrent cfg)
   examples <- loadExamples (cfgExamplesDir cfg)
+  -- Only the friendly URL when interactive; under systemd it'd go to the journal
+  -- and "localhost" is wrong there (caddy serves the real domain on 80/443).
+  interactive <- hIsTerminalDevice stdout
+  when interactive $
+    putStrLn $ "hs-bindgen playground: http://localhost:" <> show (cfgPort cfg) <> "/"
   scotty (cfgPort cfg) $ do
     get "/" $ do
       setHeader "Content-Type" "text/html; charset=utf-8"
