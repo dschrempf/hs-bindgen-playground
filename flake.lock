@@ -44,16 +44,15 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1784877966,
+        "lastModified": 1784881167,
         "narHash": "sha256-bZb4dsGYoBcjuT6quURKeytcY00pu18RVmlmq6/ryjM=",
         "owner": "well-typed",
         "repo": "hs-bindgen",
-        "rev": "729bd99e42cfc680b6b4a110696a3f99f0b509f2",
+        "rev": "bc36a73912bd318f046aaa8c000f7848439c9c34",
         "type": "github"
       },
       "original": {
         "owner": "well-typed",
-        "ref": "dom/2166/colors",
         "repo": "hs-bindgen",
         "type": "github"
       }
