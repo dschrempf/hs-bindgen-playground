@@ -1,0 +1,1 @@
+Update the pin to =hs-bindgen:main=.
