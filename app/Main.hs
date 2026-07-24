@@ -4,11 +4,8 @@
 -- @hs-bindgen-cli@ inside a bubblewrap sandbox and returns generated bindings.
 module Main (main) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
-import Control.Exception (IOException, finally)
-import Control.Exception qualified as E
+import Control.Exception (finally)
 import Control.Monad (when)
 import Data.Aeson
   ( FromJSON (..),
@@ -40,10 +37,8 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
-import System.IO (Handle, hClose, hIsTerminalDevice, stdout)
+import System.IO (hIsTerminalDevice, stdout)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Posix.IO (closeFd, dup, fdToHandle)
-import System.Posix.Terminal (openPseudoTerminal)
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
@@ -218,15 +213,14 @@ runGenerate cfg req =
     TIO.writeFile (work </> "input.h") (reqSource req)
     ownPath <- getEnv "PATH"
     let sandboxArgs = buildArgv cfg req work ownPath
-    -- Run on a pseudo-terminal so the CLI thinks it is interactive and emits
-    -- ANSI-coloured diagnostics (the frontend renders the escapes). Diagnostics
-    -- go to stderr, which the PTY merges with (empty) stdout.
-    (ec, out) <- runOnPty "timeout" sandboxArgs
+    -- Capture stderr, where the CLI writes diagnostics; @--color always@ (in
+    -- 'cliArgs') forces the ANSI escapes even though stderr is a plain pipe.
+    (ec, out) <- runCapture "timeout" sandboxArgs
     haveOut <- doesFileExist outFile
     bindings <- if haveOut then TIO.readFile outFile else pure ""
     let ran = ec == ExitSuccess && haveOut
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
-        diag = trimLines (annotateTimeout code (stripCR out))
+        diag = trimLines (annotateTimeout code out)
     pure
       GenResult
         { resOk = ran,
@@ -275,9 +269,6 @@ buildArgv cfg req work ownPath =
         "--setenv",
         "HOME",
         "/work",
-        "--setenv",
-        "TERM",
-        "xterm-256color", -- enable ANSI-coloured diagnostics
         "--ro-bind",
         "/nix/store",
         "/nix/store",
@@ -294,47 +285,24 @@ buildArgv cfg req work ownPath =
         "/work"
       ]
 
--- | Run @cmd args@ with its std streams on a fresh pseudo-terminal, returning
--- the exit code and everything written to it. A PTY makes the child (and the
--- sandboxed CLI at the end of the chain) see a terminal on stderr, so it emits
--- ANSI colours. Stdout and stderr both land on the slave; a reader thread
--- drains the master concurrently to avoid the tiny PTY buffer deadlocking.
-runOnPty :: String -> [String] -> IO (ExitCode, Text)
-runOnPty cmd args = do
-  (master, slave) <- openPseudoTerminal
-  -- The child needs the slave on fds 1 and 2; give each a private dup so
-  -- 'System.Process' can close them independently after the fork. Once the
-  -- parent holds no slave fd, the master reads EOF/EIO when the child exits.
-  slaveOut <- dup slave
-  slaveErr <- dup slave
-  closeFd slave
-  masterH <- fdToHandle master
-  hOut <- fdToHandle slaveOut
-  hErr <- fdToHandle slaveErr
-  outVar <- newEmptyMVar
-  _ <- forkIO (drainHandle masterH >>= putMVar outVar)
-  (_, _, _, ph) <-
+-- | Run @cmd args@ capturing its stderr (where the CLI writes diagnostics),
+-- decoded leniently as UTF-8. Stdin/stdout are closed; reading stderr to EOF
+-- before reaping avoids a full-pipe deadlock.
+runCapture :: String -> [String] -> IO (ExitCode, Text)
+runCapture cmd args = do
+  (_, _, mErr, ph) <-
     createProcess
       (proc cmd args)
         { std_in = NoStream,
-          std_out = UseHandle hOut,
-          std_err = UseHandle hErr,
+          std_out = NoStream,
+          std_err = CreatePipe,
           close_fds = True
         }
+  out <- case mErr of
+    Just hErr -> TE.decodeUtf8With lenientDecode <$> BS.hGetContents hErr
+    Nothing -> pure ""
   ec <- waitForProcess ph
-  out <- takeMVar outVar
   pure (ec, out)
-
--- | Read a handle to EOF, treating the PTY master's EIO-on-close as end of
--- input, and decode leniently as UTF-8. Closes the handle when done.
-drainHandle :: Handle -> IO Text
-drainHandle h = (TE.decodeUtf8With lenientDecode . BS.concat <$> go []) `finally` hClose h
-  where
-    go acc = do
-      chunk <- (Just <$> BS.hGetSome h 65536) `E.catch` \(_ :: IOException) -> pure Nothing
-      case chunk of
-        Just c | not (BS.null c) -> go (c : acc)
-        _ -> pure (reverse acc)
 
 -- | Effective verbosity: request wins, else the configured default.
 effVerbosity :: Config -> GenReq -> Int
@@ -360,6 +328,7 @@ splitArgs = go . T.unpack
 cliArgs :: Config -> GenReq -> [String]
 cliArgs cfg req =
   ["-v", show (effVerbosity cfg req)]
+    ++ ["--color", "always"] -- force ANSI diagnostics; stderr is a pipe, not a tty
     ++ ["--log-enable-macro-warnings" | reqMacroWarnings req]
     ++ [ "preprocess",
          "--single-file",
@@ -387,6 +356,7 @@ displayCommand cfg req =
       T.pack
       [ "hs-bindgen-cli -v "
           <> show (effVerbosity cfg req)
+          <> " --color always"
           <> (if reqMacroWarnings req then " --log-enable-macro-warnings" else "")
           <> " preprocess",
         "--single-file " <> (if reqSafe req then "--safe" else "--unsafe") <> " ''",
@@ -480,10 +450,6 @@ maxFileSize = 16 * 1024 * 1024
 maxLineLen = 1000 -- -v4 can emit multi-MB single lines (serialised AST dumps),
 maxLines = 10000 -- and very many of them; cap the count, but keep every line otherwise.
 maxOptionsLen = 512
-
--- | Drop carriage returns: the PTY turns @\\n@ into @\\r\\n@ on output.
-stripCR :: Text -> Text
-stripCR = T.filter (/= '\r')
 
 truncateText :: Int -> Text -> Text
 truncateText n t

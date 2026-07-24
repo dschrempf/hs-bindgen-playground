@@ -2,8 +2,9 @@
   description = "hs-bindgen-playground — paste a C header, get Haskell bindings";
 
   inputs = {
-    # Pinned via flake.lock (bump with `nix flake update hs-bindgen`), not tracking main.
-    hs-bindgen.url = "github:well-typed/hs-bindgen";
+    # Temporarily pinned to PR #2167 (--color flag) until it merges; then drop
+    # the ref and `nix flake update hs-bindgen`.
+    hs-bindgen.url = "github:well-typed/hs-bindgen/dom/2166/colors";
     # Same nixpkgs as hs-bindgen → no version skew, single eval.
     nixpkgs.follows = "hs-bindgen/nixpkgs";
     # Declarative disk layout for the nixos-anywhere Hetzner target.

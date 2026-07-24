@@ -42,12 +42,13 @@ nix flake check                           # eval everything + run the test
   `AF_NETLINK` (bwrap loopback), and never set `ProtectKernelTunables`/`ProtectControlGroups`/
   `ProtectProc`/`RestrictNamespaces`/a `SystemCallFilter` blocking clone/unshare/mount — they
   break the inner sandbox. bwrap is the real isolation boundary; the unit is defense-in-depth.
-- **Coloured diagnostics via a PTY** (`runOnPty` in `Main.hs`): the CLI only emits ANSI when
-  its *stderr* is a terminal (checked via `ansi-terminal`; `NO_COLOR`/`FORCE_COLOR` are ignored,
-  a `dumb` `TERM` disables it). So the whole `timeout → … → CLI` chain runs on a pseudo-terminal
-  (`openPseudoTerminal`) with `TERM=xterm-256color` set inside bwrap, and a reader thread drains
-  the master. `app.js` parses the SGR escapes into `.ansi-*` spans. Don't wrap with `script(1)`:
-  its `-- cmd` form drops empty argv (breaks `--safe ''`) and `-c` reintroduces a shell.
+- **Coloured diagnostics via `--color always`**: the CLI's `--color WHEN` global option
+  (`always`/`auto`/`never`, from hs-bindgen PR #2167) forces ANSI escapes regardless of
+  whether stderr is a terminal, so we just capture stderr off a plain pipe (`runCapture` in
+  `Main.hs`) and `app.js` parses the SGR escapes into `.ansi-*` spans. This replaced an
+  earlier PTY hack (`ansi-terminal` only emits colour on a tty). **The pin is temporary**:
+  `flake.nix` points `hs-bindgen` at the PR branch `dom/2166/colors`; once it merges, drop
+  the ref and `nix flake update hs-bindgen`.
 - **After editing `static/`, rebuild the package** — the store snapshots the dir, so a stale
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
