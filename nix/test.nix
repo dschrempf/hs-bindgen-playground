@@ -26,6 +26,7 @@ pkgs.testers.nixosTest {
     examples = json.loads(machine.succeed("curl -sS http://localhost/api/examples"))
     assert examples, "server served no examples"
     for ex in examples:
+        print(f"--- running example {ex['name']!r} ---")
         payload = json.dumps({"source": ex["body"], "module": "Example"})
         b64 = base64.b64encode(payload.encode()).decode()
         machine.succeed(f"echo {b64} | base64 -d > /tmp/req.json")
@@ -37,6 +38,7 @@ pkgs.testers.nixosTest {
     print(f"generated bindings for {len(examples)} examples")
 
     # A struct must generate a record with a Storable instance.
+    print("--- running check: struct generates record + Storable ---")
     out = machine.succeed(
         "curl -sS -X POST http://localhost/api/generate "
         + "-H 'Content-Type: application/json' "
@@ -48,19 +50,23 @@ pkgs.testers.nixosTest {
     assert "Storable" in out, "expected a Storable instance"
 
     # Bad C must fail cleanly, not crash the service.
+    print("--- running check: bad C fails cleanly ---")
     bad = machine.succeed(
         "curl -sS -X POST http://localhost/api/generate "
         + "-H 'Content-Type: application/json' "
         + "-d '{\"source\":\"struct { oops\"}'"
     )
+    print(bad)
     assert '"ok":false' in bad, "bad C should report ok:false"
 
     # The sandbox must block filesystem reads outside the work dir.
+    print("--- running check: sandbox blocks /etc/passwd read ---")
     leak = machine.succeed(
         "curl -sS -X POST http://localhost/api/generate "
         + "-H 'Content-Type: application/json' "
         + "-d '{\"source\":\"#include \\\"/etc/passwd\\\"\"}'"
     )
+    print(leak)
     assert "root:" not in leak, "/etc/passwd contents leaked into diagnostics!"
     assert "file not found" in leak, "expected a file-not-found error"
   '';
