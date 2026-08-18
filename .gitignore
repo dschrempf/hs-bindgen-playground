@@ -13,4 +13,4 @@
 *.o
 
 # AI
-/ai/agent-shell
+/ai/agent-shell/
