@@ -11,6 +11,3 @@
 
 *.hi
 *.o
-
-# AI
-/ai/agent-shell/
