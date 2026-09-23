@@ -28,7 +28,13 @@ import Data.Text.Encoding.Error (lenientDecode)
 import Data.Text.IO qualified as TIO
 import Data.Text.Lazy qualified as TL
 import Network.HTTP.Types (status403, status413, status503)
-import Network.Wai (pathInfo)
+import Network.Wai (Middleware, pathInfo)
+import Network.Wai.Middleware.RequestSizeLimit
+  ( defaultRequestSizeLimitSettings,
+    requestSizeLimitMiddleware,
+    setMaxLengthForRequest,
+  )
+import Network.Wai.Request (RequestSizeException (..))
 import System.Directory
   ( createDirectoryIfMissing,
     doesFileExist,
@@ -140,6 +146,15 @@ main = do
     putStrLn $
       "hs-bindgen playground: http://localhost:" <> show (cfgPort cfg) <> "/"
   scotty (cfgPort cfg) $ do
+    middleware (bodyLimit cfg)
+
+    -- 'bodyLimit' aborts an over-large body by throwing 'RequestSizeException'
+    -- from the body reader; scotty doesn't know that type, so without this it
+    -- would surface as a bare 500. Render it as the frontend's JSON error shape.
+    defaultHandler $ Handler $ \(RequestSizeException maxLen) -> do
+      status status413
+      json $ errObj ("Request too large (limit " <> tshow maxLen <> " bytes).")
+
     get "/" $ do
       setHeader "Content-Type" "text/html; charset=utf-8"
       file (cfgStaticDir cfg </> "index.html")
@@ -157,6 +172,20 @@ main = do
       json [object ["name" .= exName e, "body" .= exBody e] | e <- examples]
 
     post "/api/generate" $ handleGenerate cfg gate
+
+-- | Reject an over-large request body while it streams in, before any handler
+-- buffers it — a coarse DoS backstop below the per-field 'cfgMaxInputBytes'
+-- check. It counts bytes as they arrive (so a chunked body with no
+-- @Content-Length@ is caught too), unlike the source-size check, which runs only
+-- after the whole body is parsed. The cap is generous: JSON escaping can inflate
+-- a 'cfgMaxInputBytes' source several-fold, and the body also carries the JSON
+-- envelope and other fields. Applies regardless of any fronting proxy.
+bodyLimit :: Config -> Middleware
+bodyLimit cfg =
+  requestSizeLimitMiddleware $
+    setMaxLengthForRequest (\_ -> pure (Just limit)) defaultRequestSizeLimitSettings
+  where
+    limit = fromIntegral (cfgMaxInputBytes cfg) * 8 + 65536
 
 -- | The @POST \/api\/generate@ handler: validate, gate, run, respond.
 handleGenerate :: Config -> Gate -> ActionM ()
@@ -270,6 +299,13 @@ buildArgv cfg req work ownPath =
   where
     bwrapArgs =
       [ "--unshare-all",
+        -- --disable-userns needs an explicit --unshare-user (the implicit one
+        -- from --unshare-all does not satisfy it); together they let bwrap set
+        -- up its own user namespace but block the sandboxed process from
+        -- creating nested ones, removing the userns kernel attack surface from
+        -- anything running inside.
+        "--unshare-user",
+        "--disable-userns",
         "--die-with-parent",
         "--new-session",
         "--clearenv",

@@ -71,6 +71,40 @@ in
       description = "hs-bindgen-cli verbosity for the diagnostics panel (0–4).";
     };
 
+    memoryMax = lib.mkOption {
+      type = lib.types.str;
+      default = toString (cfg.memoryBytes + 512 * 1024 * 1024);
+      defaultText = lib.literalExpression "memoryBytes + 512 MiB";
+      description = ''
+        Physical-memory ceiling for the *whole* service (systemd `MemoryMax`,
+        cgroup-enforced): every job plus the server's own request buffers. This
+        is a different quantity from `memoryBytes`, which is the per-job *virtual
+        address space* limit (`prlimit --as`); a job's real resident memory is
+        usually far below its address-space reservation.
+
+        The default is one job's `memoryBytes` plus 512 MiB of headroom, so a
+        single heavy job that touches its full allowance still fits. It does
+        *not* budget for `maxConcurrent` jobs all peaking at once — that is the
+        intended backstop: a burst of memory-heavy jobs is cgroup-killed rather
+        than allowed to OOM the host. Raise it if you expect several heavy jobs
+        concurrently and the VM has the RAM; lower it on a tiny VM, accepting
+        that one very heavy job may then be killed before it reaches its own
+        `--as` limit.
+      '';
+    };
+
+    cpuQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "200%";
+      description = "CPU ceiling for the whole service (systemd `CPUQuota`); 100% = one core.";
+    };
+
+    tasksMax = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 256;
+      description = "Cap on tasks/PIDs for the whole service (systemd `TasksMax`), bounding fork storms.";
+    };
+
     readOnly = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -131,6 +165,14 @@ in
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
         Restart = "on-failure";
+
+        # Resource ceilings for the whole service — the host-level backstop that
+        # holds even if the per-job prlimits inside the sandbox are evaded or
+        # several jobs peak together. MemoryMax stops a large request body (or a
+        # burst of them) from OOM-ing the box; TasksMax bounds fork storms.
+        MemoryMax = cfg.memoryMax;
+        CPUQuota = cfg.cpuQuota;
+        TasksMax = cfg.tasksMax;
 
         # Hardening — kept compatible with bubblewrap, which needs unprivileged
         # user namespaces. Do NOT add RestrictNamespaces or a SystemCallFilter
