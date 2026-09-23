@@ -46,9 +46,7 @@ nix flake check                           # eval everything + run the test
   (`always`/`auto`/`never`, from hs-bindgen PR #2167) forces ANSI escapes regardless of
   whether stderr is a terminal, so we just capture stderr off a plain pipe (`runCapture` in
   `Main.hs`) and `app.js` parses the SGR escapes into `.ansi-*` spans. This replaced an
-  earlier PTY hack (`ansi-terminal` only emits colour on a tty). **The pin is temporary**:
-  `flake.nix` points `hs-bindgen` at the PR branch `dom/2166/colors`; once it merges, drop
-  the ref and `nix flake update hs-bindgen`.
+  earlier PTY hack (`ansi-terminal` only emits colour on a tty).
 - **After editing `static/`, rebuild the package** — the store snapshots the dir, so a stale
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
