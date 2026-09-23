@@ -22,6 +22,7 @@ nix flake check                           # eval everything + run the test
 - `nix/package.nix` — `callCabal2nix` + `makeWrapper` putting runtime tools on PATH.
 - `nix/module.nix` — NixOS module (hardened systemd unit + optional caddy/ACME).
   Applied as `nixosModules.default`; it takes `self` partially applied.
+  `reverseProxy.enable = false` drops caddy for hosts that terminate TLS themselves.
 - `nix/test.nix` — the nixosTest. `nix/hetzner.nix` — nixos-anywhere target (disko).
 - `static/` — hand-written HTML/CSS/JS + vendored CodeMirror/highlight.js under `vendor/`.
 - `examples/*.h` — dropdown examples, read at startup; label = filename sans `NN-` and `.h`.

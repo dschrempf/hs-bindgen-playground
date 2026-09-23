@@ -83,6 +83,16 @@ in
       description = "Banner text shown when `readOnly` is set.";
     };
 
+    reverseProxy.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Run caddy in front of the server. Turn it off on a host that already has
+        its own reverse proxy or tunnel: the service then only listens on `port`,
+        and `domain`/`acmeEmail`/`openFirewall` have no effect.
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -95,6 +105,10 @@ in
       {
         assertion = cfg.domain == null || cfg.acmeEmail != null;
         message = "services.hs-bindgen-playground: acmeEmail is required when domain is set.";
+      }
+      {
+        assertion = cfg.reverseProxy.enable || cfg.domain == null;
+        message = "services.hs-bindgen-playground: domain is set but reverseProxy.enable is false, so nothing would serve it.";
       }
     ];
 
@@ -138,7 +152,7 @@ in
       };
     };
 
-    services.caddy = {
+    services.caddy = lib.mkIf cfg.reverseProxy.enable {
       enable = true;
       email = lib.mkIf (cfg.acmeEmail != null) cfg.acmeEmail;
       virtualHosts.${siteAddr}.extraConfig = ''
@@ -147,6 +161,7 @@ in
     };
 
     networking.firewall.allowedTCPPorts =
-      lib.mkIf cfg.openFirewall (if cfg.domain != null then [ 80 443 ] else [ 80 ]);
+      lib.mkIf (cfg.reverseProxy.enable && cfg.openFirewall)
+        (if cfg.domain != null then [ 80 443 ] else [ 80 ]);
   };
 }

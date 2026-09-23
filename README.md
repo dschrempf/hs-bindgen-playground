@@ -76,6 +76,18 @@ With a `domain`, caddy provisions Let's Encrypt TLS automatically. The systemd
 unit is hardened (`DynamicUser`, `ProtectSystem=strict`, …) but deliberately
 leaves user namespaces available, since bubblewrap needs them.
 
+On a host that already terminates TLS — its own nginx, or a Cloudflare tunnel —
+set `reverseProxy.enable = false` and point that proxy at `port`; caddy would
+otherwise fight the existing one for 80/443:
+
+```nix
+services.hs-bindgen-playground = {
+  enable = true;
+  reverseProxy.enable = false;
+  port = 3000;
+};
+```
+
 ### Fresh Hetzner Cloud VM (talk duration)
 
 Rent any Cloud VM, then from your laptop (see `nix/hetzner.nix` — fill in the
