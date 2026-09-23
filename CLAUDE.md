@@ -69,6 +69,12 @@ nix flake check                           # eval everything + run the test
   the cabal files stay the single source. Unset → "dev"; a dirty rev is shown unlinked.
 - **After editing `static/`, rebuild the package** — the store snapshots the dir, so a stale
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
+- **Static assets carry an explicit `Cache-Control`** (`cachePolicyFor` in `Main.hs`):
+  `no-cache` for the HTML and our own JS/CSS, a year of `immutable` for `static/vendor/**`.
+  Store mtimes are 1970, so without it browsers cache heuristically forever and a CDN
+  invents its own TTL — Cloudflare served a pre-deploy `app.js` for hours in front of
+  Blaubaer. The vendor exemption is an invariant: replace a vendored bundle under a new
+  file name, never in place.
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
   `nix flake update hs-bindgen`.
 - `checks.integration` (the nixosTest) is defined for both Linux systems; it's

@@ -214,6 +214,7 @@ main = do
 
     get "/" $ do
       setHeader "Content-Type" "text/html; charset=utf-8"
+      setHeader "Cache-Control" (cachePolicyFor "index.html")
       file (cfgStaticDir cfg </> "index.html")
 
     staticRoute (cfgStaticDir cfg)
@@ -555,6 +556,7 @@ staticRoute :: FilePath -> ScottyM ()
 staticRoute dir = get (function matcher) $ do
   rel <- captureParam "rel"
   setHeader "Content-Type" (contentTypeFor (T.unpack rel))
+  setHeader "Cache-Control" (cachePolicyFor rel)
   file (dir </> T.unpack rel)
   where
     matcher r = case pathInfo r of
@@ -563,6 +565,22 @@ staticRoute dir = get (function matcher) $ do
             Just [("rel", T.intercalate "/" rest)]
       _ -> Nothing
     safeSeg s = not (T.null s) && s /= ".." && not (T.any (== '/') s)
+
+-- | How long a cache may keep an asset, by path relative to the static dir.
+--
+-- Everything the store snapshots has a 1970 mtime, so a conditional request can
+-- never disprove a stale copy; without an explicit policy a browser's heuristic
+-- freshness keeps an asset essentially forever, and a fronting CDN invents its
+-- own TTL (Cloudflare pinned @app.js@ for hours past a deploy). Hence
+-- @no-cache@: revalidate every time, and the CDN stays out of it.
+--
+-- Vendored bundles are exempt — they are big and change only with a version
+-- bump. That makes it an invariant: replace one under a new file name, or the
+-- year-long copies in the wild never notice.
+cachePolicyFor :: Text -> TL.Text
+cachePolicyFor rel
+  | "vendor/" `T.isPrefixOf` rel = "public, max-age=31536000, immutable"
+  | otherwise = "no-cache"
 
 contentTypeFor :: FilePath -> TL.Text
 contentTypeFor p = case takeExtension p of
