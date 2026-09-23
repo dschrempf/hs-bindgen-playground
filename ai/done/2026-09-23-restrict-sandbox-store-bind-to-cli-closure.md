@@ -37,3 +37,26 @@ still generate (they rely only on the CLI's bundled clang headers).
 Alternative, if the closure enumeration is fiddly: accept the exposure for the
 talk (nothing sensitive in the store) and revisit only if the box gains other
 services.
+
+## Outcome (2026-09-23): closure bound path by path
+
+The enumeration was not fiddly — `closureInfo { rootPaths = runtimeDeps; }` in
+`package.nix` writes the list, `makeWrapper --set PLAYGROUND_STORE_PATHS` points
+the server at it, and `buildArgv` emits one `--ro-bind p p` per line. 78 paths
+on the current pin; no measurable latency change (~0.29 s per request either
+way). The config field is a `StoreBind` sum, so the whole-store branch is an
+explicit named case rather than an empty list.
+
+`cabal run` never touches the wrapper, so the dev shell sets the same variable
+from `passthru.storePaths` — dev and deploy now bind identically, and a missing
+runtime dep surfaces during iteration. Bare binary with no environment still
+falls back to the whole store.
+
+The predicted downside did not bite: every shipped example still generates (the
+nixosTest runs all of them). Two checks added there — `#include` of
+`/run/current-system/activate` now reports "file not found" where it previously
+came back tokenised, and the `/etc/passwd` check still holds.
+
+Note this narrows the primitive rather than removing it: the CLI's own closure
+(glibc, gcc, its clang bundle) remains readable, as it must be. What is gone is
+the system closure and any future secret a module drops into the store.

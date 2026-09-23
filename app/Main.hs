@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | hs-bindgen playground: a scotty server that shells out to the Nix-built
@@ -6,7 +7,7 @@ module Main (main) where
 
 import Control.Concurrent.STM
 import Control.Exception (finally)
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Data.Aeson
   ( FromJSON (..),
     Value,
@@ -60,6 +61,7 @@ data Config = Config
     cfgStaticDir :: FilePath,
     cfgExamplesDir :: FilePath,
     cfgCli :: String,
+    cfgStoreBind :: StoreBind,
     cfgMaxConcurrent :: Int,
     cfgMaxInputBytes :: Int,
     cfgTimeoutSecs :: Int,
@@ -69,6 +71,18 @@ data Config = Config
     cfgReadOnly :: Bool,
     cfgReadOnlyMsg :: Text
   }
+
+-- | What of the Nix store the sandbox may read.
+data StoreBind
+  = -- | Bind exactly these paths — the runtime closure of everything the server
+    -- shells out to, from the file @PLAYGROUND_STORE_PATHS@ names. Keeps a
+    -- crafted @#include@ from reading unrelated store paths (the system closure,
+    -- anything a future module puts there) and echoing them back as diagnostics.
+    BindClosure [FilePath]
+  | -- | Bind all of @\/nix\/store@. Only reached with @PLAYGROUND_STORE_PATHS@
+    -- unset, i.e. running the unwrapped binary with no environment; the flake
+    -- sets the variable for both @cabal run@ and the wrapped package.
+    BindWholeStore
 
 -- | A curated example header shown in the UI dropdown.
 data Example = Example
@@ -99,6 +113,24 @@ instance FromJSON GenReq where
       <*> o .:? "verbosity"
       <*> o .:? "macroWarnings" .!= True
       <*> o .:? "options" .!= ""
+
+-- | One extra @preprocess@ option, already checked against 'allowedOpts'.
+data ExtraOpt = ExtraOpt
+  { optFlag :: Text,
+    optArgs :: [Text]
+  }
+
+-- | A validated request, ready to run: every free-form field of 'GenReq' parsed
+-- into what the CLI will actually receive.
+data Job = Job
+  { jobSource :: Text,
+    jobStd :: Text,
+    jobSafe :: Bool,
+    jobModule :: Text,
+    jobVerbosity :: Int,
+    jobMacroWarnings :: Bool,
+    jobExtraOpts :: [ExtraOpt]
+  }
 
 -- | How a sandboxed run ended, as far as the UI cares.
 data Outcome
@@ -205,52 +237,111 @@ handleGenerate cfg gate
               <> " bytes; limit "
               <> tshow (cfgMaxInputBytes cfg)
               <> ")."
-        else case validate req of
+        else case validate cfg req of
           Left msg -> do
             status status403
             json (errObj msg)
-          Right req' -> do
-            mres <- liftIO $ withGate gate (runGenerate cfg req')
+          Right job -> do
+            mres <- liftIO $ withGate gate (runGenerate cfg job)
             case mres of
               Nothing -> do
                 status status503
                 json (errObj "Server busy — please try again in a moment.")
               Just res -> json (resultObj res)
 
--- | Validate module name and C standard; normalise the request.
-validate :: GenReq -> Either Text GenReq
-validate req
-  | not (validModule (reqModule req)) =
-      Left "Module name must start with an uppercase letter and contain only letters, digits, or underscores."
-  | reqStd req `notElem` allowedStds =
-      Left $ "Unsupported C standard: " <> reqStd req <> "."
-  | not (validVerbosity (reqVerbosity req)) =
-      Left "Verbosity must be between 0 and 4."
-  | T.length (reqExtraOpts req) > maxOptionsLen =
-      Left $ "Additional options too long (limit " <> tshow maxOptionsLen <> " chars)."
-  | otherwise = Right req
-  where
-    validModule m =
-      not (T.null m)
-        && isUpper (T.head m)
-        && T.all (\c -> isAlphaNum c || c == '_') m
-    validVerbosity Nothing = True
-    validVerbosity (Just v) = v >= 0 && v <= 4
+-- | Turn a wire 'GenReq' into a 'Job', rejecting anything the CLI shouldn't see.
+validate :: Config -> GenReq -> Either Text Job
+validate cfg req = do
+  let m = reqModule req
+  unless
+    (not (T.null m) && isUpper (T.head m) && T.all (\c -> isAlphaNum c || c == '_') m)
+    (Left "Module name must start with an uppercase letter and contain only letters, digits, or underscores.")
+  unless
+    (reqStd req `elem` allowedStds)
+    (Left $ "Unsupported C standard: " <> reqStd req <> ".")
+  verbosity <- case reqVerbosity req of
+    Nothing -> Right (cfgVerbosity cfg)
+    Just v
+      | v >= 0 && v <= 4 -> Right v
+      | otherwise -> Left "Verbosity must be between 0 and 4."
+  unless
+    (T.length (reqExtraOpts req) <= maxOptionsLen)
+    (Left $ "Additional options too long (limit " <> tshow maxOptionsLen <> " chars).")
+  opts <- parseExtraOpts (reqExtraOpts req)
+  pure
+    Job
+      { jobSource = reqSource req,
+        jobStd = reqStd req,
+        jobSafe = reqSafe req,
+        jobModule = m,
+        jobVerbosity = verbosity,
+        jobMacroWarnings = reqMacroWarnings req,
+        jobExtraOpts = opts
+      }
 
 allowedStds :: [Text]
 allowedStds = ["c89", "c99", "c11", "c17", "c23"]
 
+-- | The extra @preprocess@ options the UI may add, with each one's argument
+-- count. Deliberately excluded: anything naming a file or an include directory,
+-- anything forwarded to clang (@--clang-option@ and friends), and anything
+-- 'cliArgs' already fixes. Without that restriction the field hands anonymous
+-- users the whole clang command line — @--clang-option=-I\/etc@ turns a crafted
+-- @#include@ into a file-read primitive whose contents come back as diagnostics.
+allowedOpts :: [(Text, Int)]
+allowedOpts =
+  [ ("--fblocks", 0),
+    ("--no-stdlib", 0),
+    ("--binding-spec-allow-newer", 0),
+    ("--select-all", 0),
+    ("--select-from-main-headers", 0),
+    ("--select-from-main-header-dirs", 0),
+    ("--select-except-deprecated", 0),
+    ("--enable-program-slicing", 0),
+    ("--omit-field-prefixes", 0),
+    ("--parse-empty-macros", 0),
+    ("--post-qualified-imports", 0),
+    -- PCRE arguments are attacker-controlled, but a pathological pattern only
+    -- burns the job's own prlimit --cpu budget.
+    ("--select-by-header-path", 1),
+    ("--select-except-by-header-path", 1),
+    ("--select-by-decl-name", 1),
+    ("--select-except-by-decl-name", 1),
+    ("--path-style", 1),
+    ("--hash-define", 2)
+  ]
+
+-- | Parse the free-form options string into checked 'ExtraOpt's.
+parseExtraOpts :: Text -> Either Text [ExtraOpt]
+parseExtraOpts = go . map T.pack . splitArgs
+  where
+    go [] = Right []
+    go (tok : rest) = case lookup tok allowedOpts of
+      Nothing ->
+        Left $
+          "Option not allowed: "
+            <> tok
+            <> ". Accepted: "
+            <> T.intercalate ", " (map fst allowedOpts)
+            <> "."
+      Just n
+        | length args < n ->
+            Left $ tok <> " takes " <> tshow n <> " argument(s)."
+        | otherwise -> (ExtraOpt tok args :) <$> go rest'
+        where
+          (args, rest') = splitAt n rest
+
 -- | Run the CLI in the sandbox against the request's source, in a fresh temp dir.
-runGenerate :: Config -> GenReq -> IO GenResult
-runGenerate cfg req =
+runGenerate :: Config -> Job -> IO GenResult
+runGenerate cfg job =
   withSystemTempDirectory "playground" $ \tmp -> do
     let work = tmp </> "work"
         outDir = work </> "out"
-        outFile = outDir </> T.unpack (reqModule req) <> ".hs"
+        outFile = outDir </> T.unpack (jobModule job) <> ".hs"
     createDirectoryIfMissing True outDir
-    TIO.writeFile (work </> "input.h") (reqSource req)
+    TIO.writeFile (work </> "input.h") (jobSource job)
     ownPath <- getEnv "PATH"
-    let sandboxArgs = buildArgv cfg req work ownPath
+    let sandboxArgs = buildArgv cfg job work ownPath
     -- Capture stderr, where the CLI writes diagnostics; @--color always@ (in
     -- 'cliArgs') forces the ANSI escapes even though stderr is a plain pipe.
     (ec, out) <- runCapture "timeout" sandboxArgs
@@ -262,7 +353,7 @@ runGenerate cfg req =
       GenResult
         { resOk = case outcome of Generated -> True; _ -> False,
           resBindings = truncateText maxBindings bindings,
-          resCommand = displayCommand cfg req,
+          resCommand = displayCommand job,
           resDiagnostics = trimLines (annotate outcome out),
           resExitCode = code
         }
@@ -281,8 +372,8 @@ runGenerate cfg req =
     annotate _ d = d
 
 -- | Arguments to @timeout@, chaining @timeout → prlimit → bwrap → hs-bindgen-cli@.
-buildArgv :: Config -> GenReq -> FilePath -> String -> [String]
-buildArgv cfg req work ownPath =
+buildArgv :: Config -> Job -> FilePath -> String -> [String]
+buildArgv cfg job work ownPath =
   ["--signal=KILL", show (cfgTimeoutSecs cfg) <> "s"]
     ++ [ "prlimit",
          "--as=" <> show (cfgMemBytes cfg),
@@ -295,8 +386,11 @@ buildArgv cfg req work ownPath =
     ++ bwrapArgs
     ++ ["--"]
     ++ [cfgCli cfg]
-    ++ cliArgs cfg req
+    ++ cliArgs job
   where
+    storeBindArgs = case cfgStoreBind cfg of
+      BindWholeStore -> ["--ro-bind", "/nix/store", "/nix/store"]
+      BindClosure ps -> concat [["--ro-bind", p, p] | p <- ps]
     bwrapArgs =
       [ "--unshare-all",
         -- --disable-userns needs an explicit --unshare-user (the implicit one
@@ -317,22 +411,21 @@ buildArgv cfg req work ownPath =
         "/tmp",
         "--setenv",
         "HOME",
-        "/work",
-        "--ro-bind",
-        "/nix/store",
-        "/nix/store",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--bind",
-        work,
-        "/work",
-        "--chdir",
         "/work"
       ]
+        ++ storeBindArgs
+        ++ [ "--proc",
+             "/proc",
+             "--dev",
+             "/dev",
+             "--tmpfs",
+             "/tmp",
+             "--bind",
+             work,
+             "/work",
+             "--chdir",
+             "/work"
+           ]
 
 -- | Run @cmd args@ capturing its stderr (where the CLI writes diagnostics),
 -- decoded leniently as UTF-8. Reading stderr to EOF before reaping avoids a
@@ -360,13 +453,10 @@ runCapture cmd args = do
   ec <- waitForProcess ph
   pure (ec, out)
 
--- | Effective verbosity: request wins, else the configured default.
-effVerbosity :: Config -> GenReq -> Int
-effVerbosity cfg req = fromMaybe (cfgVerbosity cfg) (reqVerbosity req)
-
--- | Split a free-form option string into argv, honouring single/double quotes
--- (which group and are stripped). No shell involved — args go straight to
--- 'createProcess' as an argv list — so there is nothing to escape and no injection.
+-- | Split a free-form option string into tokens, honouring single/double quotes
+-- (which group and are stripped). No shell involved — 'parseExtraOpts' checks
+-- the tokens and 'createProcess' takes an argv list — so there is nothing to
+-- escape and no injection.
 splitArgs :: Text -> [String]
 splitArgs = go . T.unpack
   where
@@ -381,48 +471,56 @@ splitArgs = go . T.unpack
       | otherwise = lexTok (acc ++ [c]) cs
 
 -- | The CLI arguments (also mirrored by 'displayCommand', minus paths).
-cliArgs :: Config -> GenReq -> [String]
-cliArgs cfg req =
-  ["-v", show (effVerbosity cfg req)]
+cliArgs :: Job -> [String]
+cliArgs job =
+  ["-v", show (jobVerbosity job)]
     ++ ["--color", "always"] -- force ANSI diagnostics; stderr is a pipe, not a tty
-    ++ ["--log-enable-macro-warnings" | reqMacroWarnings req]
+    ++ ["--log-enable-macro-warnings" | jobMacroWarnings job]
     ++ [ "preprocess",
          "--single-file",
-         if reqSafe req then "--safe" else "--unsafe",
+         if jobSafe job then "--safe" else "--unsafe",
          "",
          "--unique-id",
          "playground.hs-bindgen",
          "--module",
-         T.unpack (reqModule req),
+         T.unpack (jobModule job),
          "--hs-output-dir",
          "/work/out",
          "--create-output-dirs",
          "--overwrite-files",
-         "--clang-option=-std=" <> T.unpack (reqStd req)
+         "--clang-option=-std=" <> T.unpack (jobStd job)
        ]
-    ++ splitArgs (reqExtraOpts req)
+    ++ concatMap extraOptArgv (jobExtraOpts job)
     ++ ["-I", "/work", "input.h"]
+
+extraOptArgv :: ExtraOpt -> [String]
+extraOptArgv o = map T.unpack (optFlag o : optArgs o)
 
 -- | A human-readable, copy-pasteable version of the CLI command for the UI.
 -- Paths are shown relative (@out@, @.@) rather than the sandbox @\/work@ ones.
-displayCommand :: Config -> GenReq -> Text
-displayCommand cfg req =
+displayCommand :: Job -> Text
+displayCommand job =
   T.intercalate " \\\n  " $
     map
       T.pack
       [ "hs-bindgen-cli -v "
-          <> show (effVerbosity cfg req)
+          <> show (jobVerbosity job)
           <> " --color always"
-          <> (if reqMacroWarnings req then " --log-enable-macro-warnings" else "")
+          <> (if jobMacroWarnings job then " --log-enable-macro-warnings" else "")
           <> " preprocess",
-        "--single-file " <> (if reqSafe req then "--safe" else "--unsafe") <> " ''",
+        "--single-file " <> (if jobSafe job then "--safe" else "--unsafe") <> " ''",
         "--unique-id playground.hs-bindgen",
-        "--module " <> T.unpack (reqModule req),
+        "--module " <> T.unpack (jobModule job),
         "--hs-output-dir out --create-output-dirs --overwrite-files",
-        "--clang-option=-std=" <> T.unpack (reqStd req)
+        "--clang-option=-std=" <> T.unpack (jobStd job)
       ]
-      ++ [opts | let opts = T.strip (reqExtraOpts req), not (T.null opts)]
+      ++ map showOpt (jobExtraOpts job)
       ++ ["-I . input.h"]
+  where
+    showOpt o = T.unwords (optFlag o : map quote (optArgs o))
+    quote a
+      | T.null a || T.any isSpace a = "'" <> a <> "'"
+      | otherwise = a
 
 -- Serving static assets -----------------------------------------------------
 
@@ -476,6 +574,7 @@ loadConfig = do
     <*> pure static
     <*> pure examples
     <*> (fromMaybe "hs-bindgen-cli" <$> lookupEnv "PLAYGROUND_CLI")
+    <*> loadStoreBind
     <*> envInt "PLAYGROUND_MAX_CONCURRENT" 4
     <*> envInt "PLAYGROUND_MAX_INPUT_BYTES" 65536
     <*> envInt "PLAYGROUND_TIMEOUT_SECONDS" 10
@@ -483,6 +582,18 @@ loadConfig = do
     <*> envInt "PLAYGROUND_VERBOSITY" 2
     <*> envBool "PLAYGROUND_READONLY" False
     <*> (T.pack . fromMaybe "Generation is temporarily disabled." <$> lookupEnv "PLAYGROUND_READONLY_MESSAGE")
+
+-- | Read the sandbox's store allowlist from the file @PLAYGROUND_STORE_PATHS@
+-- names (Nix' @closureInfo@ writes one path per line; @nix\/package.nix@ points
+-- the variable at it). Unset means nothing told us what the closure is, so fall
+-- back to the whole store rather than a sandbox missing the CLI.
+loadStoreBind :: IO StoreBind
+loadStoreBind =
+  lookupEnv "PLAYGROUND_STORE_PATHS" >>= \case
+    Nothing -> pure BindWholeStore
+    Just f -> do
+      ls <- map T.strip . T.lines <$> TIO.readFile f
+      pure $ BindClosure [T.unpack l | l <- ls, not (T.null l)]
 
 -- | Load @*.h@ examples, sorted by filename; label strips a leading @NN-@ and @.h@.
 loadExamples :: FilePath -> IO [Example]

@@ -4,6 +4,7 @@
   makeWrapper,
   stdenv,
   bubblewrap,
+  closureInfo,
   coreutils,
   util-linux,
   hsBindgenCli,
@@ -16,15 +17,20 @@ let
   # Everything the server shells out to at runtime, incl. inside the sandbox:
   # bwrap/timeout/prlimit — spawn+confine the CLI. The CLI wrapper puts its own
   # version-matched clang and doxygen on PATH, so we no longer add them here.
-  # The server forwards its PATH into the bwrap sandbox; the whole /nix/store is
-  # bound read-only, so the CLI's clang/doxygen (part of its closure) are
-  # reachable there too.
+  # The server forwards its PATH into the bwrap sandbox.
   runtimeDeps = [
     hsBindgenCli
     bubblewrap
     coreutils
     util-linux
   ];
+
+  # The exact store paths the sandbox may read: the runtime closure of the tools
+  # above, one per line. The server ro-binds these individually instead of all of
+  # /nix/store, so a crafted `#include` can't read unrelated store paths (the
+  # system closure, whatever a future module puts there) back out as
+  # diagnostics. A runtime dep the closure misses makes the sandbox fail loudly.
+  storePaths = "${closureInfo { rootPaths = runtimeDeps; }}/store-paths";
 in
 stdenv.mkDerivation {
   pname = "hs-bindgen-playground";
@@ -37,11 +43,12 @@ stdenv.mkDerivation {
     mkdir -p $out/bin
     makeWrapper ${server}/bin/hs-bindgen-playground $out/bin/hs-bindgen-playground \
       --prefix PATH : ${lib.makeBinPath runtimeDeps} \
+      --set PLAYGROUND_STORE_PATHS ${storePaths} \
       --set PLAYGROUND_STATIC_DIR ${../static} \
       --set PLAYGROUND_EXAMPLES_DIR ${../examples}
   '';
 
-  passthru = { inherit server; };
+  passthru = { inherit server storePaths; };
 
   meta = {
     description = "Web playground for hs-bindgen";

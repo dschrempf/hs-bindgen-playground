@@ -36,9 +36,19 @@ nix flake check                           # eval everything + run the test
 - **The CLI needs a matching `clang` binary and `doxygen` on PATH** (not just libclang):
   clang for macro reparsing, doxygen for doc comments. As of the current pin these are
   bundled on the CLI wrapper's own PATH (with a matching `BINDGEN_EXTRA_CLANG_ARGS`), so
-  this flake no longer adds them. They're in the CLI's closure, hence reachable inside
-  bwrap (which binds all of `/nix/store` read-only). If a future bump drops the bundling,
-  re-add version-matched `clang`+`doxygen` to `package.nix`'s `runtimeDeps`.
+  this flake no longer adds them. They're in the CLI's closure, hence bound inside bwrap.
+  If a future bump drops the bundling, re-add version-matched `clang`+`doxygen` to
+  `package.nix`'s `runtimeDeps`.
+- **The sandbox binds only `runtimeDeps`' closure, not all of `/nix/store`** (~78 paths).
+  `package.nix` computes it with `closureInfo` and points `PLAYGROUND_STORE_PATHS` at the
+  resulting `store-paths` file; the dev shell sets the same variable so `cabal run` matches.
+  A runtime tool absent from `runtimeDeps` is therefore *missing inside the sandbox* even
+  though it's on PATH — symptom is a "file not found"/exec failure, not a store permission
+  error. Unset variable falls back to binding the whole store.
+- **Additional options are an allowlist** (`allowedOpts` in `Main.hs`), not a passthrough:
+  known `preprocess` flags plus their argument count. Nothing that names a file, reaches
+  clang (`--clang-option*`, `-I`), or duplicates a flag `cliArgs` fixes. Add new flags
+  there; the UI placeholder in `index.html` is the only other place that mentions them.
 - **systemd hardening vs bwrap** (in `module.nix`): `RestrictAddressFamilies` must include
   `AF_NETLINK` (bwrap loopback), and never set `ProtectKernelTunables`/`ProtectControlGroups`/
   `ProtectProc`/`RestrictNamespaces`/a `SystemCallFilter` blocking clone/unshare/mount — they

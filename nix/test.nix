@@ -18,6 +18,14 @@ pkgs.testers.nixosTest {
   testScript = ''
     import base64, json
 
+    def post(payload):
+        b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+        machine.succeed(f"echo {b64} | base64 -d > /tmp/req.json")
+        return machine.succeed(
+            "curl -sS -X POST http://localhost/api/generate "
+            + "-H 'Content-Type: application/json' --data @/tmp/req.json"
+        )
+
     machine.wait_for_unit("hs-bindgen-playground.service")
     machine.wait_for_unit("caddy.service")
     machine.wait_for_open_port(80)
@@ -27,13 +35,7 @@ pkgs.testers.nixosTest {
     assert examples, "server served no examples"
     for ex in examples:
         print(f"--- running example {ex['name']!r} ---")
-        payload = json.dumps({"source": ex["body"], "module": "Example"})
-        b64 = base64.b64encode(payload.encode()).decode()
-        machine.succeed(f"echo {b64} | base64 -d > /tmp/req.json")
-        out = machine.succeed(
-            "curl -sS -X POST http://localhost/api/generate "
-            + "-H 'Content-Type: application/json' --data @/tmp/req.json"
-        )
+        out = post({"source": ex["body"], "module": "Example"})
         assert json.loads(out).get("ok") is True, f"example {ex['name']!r} failed: {out}"
     print(f"generated bindings for {len(examples)} examples")
 
@@ -69,5 +71,20 @@ pkgs.testers.nixosTest {
     print(leak)
     assert "root:" not in leak, "/etc/passwd contents leaked into diagnostics!"
     assert "file not found" in leak, "expected a file-not-found error"
+
+    # Only the CLI's own closure is bound, so the system closure is unreachable.
+    print("--- running check: sandbox binds only the CLI closure ---")
+    system = machine.succeed("readlink -f /run/current-system").strip()
+    leak = post({"source": f'#include "{system}/activate"'})
+    print(leak)
+    assert "file not found" in leak, f"{system}/activate was readable in the sandbox!"
+
+    # The additional-options field only accepts allowlisted preprocess flags.
+    print("--- running check: additional options are allowlisted ---")
+    ok = post({"source": "struct Point { int x; };", "options": "--select-all"})
+    assert '"ok":true' in ok, f"allowlisted option rejected: {ok}"
+    denied = post({"source": "int x;", "options": "--clang-option=-I/etc"})
+    print(denied)
+    assert "Option not allowed" in denied, "clang passthrough should be rejected"
   '';
 }

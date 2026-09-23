@@ -47,6 +47,11 @@
         in
         {
           default = pkgs.mkShell {
+            # `cabal run` skips the wrapper, so hand it the same sandbox store
+            # allowlist the wrapped binary gets — a dep missing from the closure
+            # then shows up here, not first in the VM test.
+            env.PLAYGROUND_STORE_PATHS = self.packages.${system}.default.storePaths;
+
             # Runtime tools the server shells out to, plus the Haskell toolchain.
             packages = [
               (hsPkgs.ghcWithPackages (p: [
