@@ -94,6 +94,15 @@ instance FromJSON GenReq where
       <*> o .:? "macroWarnings" .!= True
       <*> o .:? "options" .!= ""
 
+-- | How a sandboxed run ended, as far as the UI cares.
+data Outcome
+  = -- | The CLI exited cleanly and wrote the module.
+    Generated
+  | -- | The @timeout@ wrapper killed the chain.
+    TimedOut
+  | -- | The CLI reported an error, or wrote no module.
+    Failed
+
 -- | Result of a successful (or failed-but-ran) generation.
 data GenResult = GenResult
   { resOk :: Bool,
@@ -218,25 +227,29 @@ runGenerate cfg req =
     (ec, out) <- runCapture "timeout" sandboxArgs
     haveOut <- doesFileExist outFile
     bindings <- if haveOut then TIO.readFile outFile else pure ""
-    let ran = ec == ExitSuccess && haveOut
+    let outcome = classify ec haveOut
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
-        diag = trimLines (annotateTimeout code out)
     pure
       GenResult
-        { resOk = ran,
+        { resOk = case outcome of Generated -> True; _ -> False,
           resBindings = truncateText maxBindings bindings,
           resCommand = displayCommand cfg req,
-          resDiagnostics = diag,
+          resDiagnostics = trimLines (annotate outcome out),
           resExitCode = code
         }
   where
-    -- timeout kills with SIGKILL → exit 128+9.
-    annotateTimeout 137 d =
+    -- @timeout --signal=KILL@ re-raises SIGKILL on itself, so waitForProcess
+    -- reports -9; a shell renders that same death as 137.
+    classify ExitSuccess haveOut = if haveOut then Generated else Failed
+    classify (ExitFailure n) _
+      | n == -9 || n == 137 = TimedOut
+      | otherwise = Failed
+    annotate TimedOut d =
       d
         <> "\n[playground] Killed: exceeded the "
         <> tshow (cfgTimeoutSecs cfg)
         <> "s time limit."
-    annotateTimeout _ d = d
+    annotate _ d = d
 
 -- | Arguments to @timeout@, chaining @timeout → prlimit → bwrap → hs-bindgen-cli@.
 buildArgv :: Config -> GenReq -> FilePath -> String -> [String]
