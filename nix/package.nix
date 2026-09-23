@@ -8,6 +8,10 @@
   coreutils,
   util-linux,
   hsBindgenCli,
+  # Short git revisions of this repo and of the pinned hs-bindgen, from
+  # flake.nix. "unknown" when Nix has none (building from a plain path).
+  playgroundRevision ? "unknown",
+  hsBindgenRevision ? "unknown",
 }:
 
 let
@@ -31,6 +35,16 @@ let
   # system closure, whatever a future module puts there) back out as
   # diagnostics. A runtime dep the closure misses makes the sandbox fail loudly.
   storePaths = "${closureInfo { rootPaths = runtimeDeps; }}/store-paths";
+
+  # What the running instance says it is, shown in the UI header and logged at
+  # startup. Exposed via passthru so the dev shell can set the same variables
+  # and `cabal run` reports the same identity as the wrapped binary.
+  versionEnv = {
+    PLAYGROUND_VERSION = server.version;
+    PLAYGROUND_REVISION = playgroundRevision;
+    PLAYGROUND_HS_BINDGEN_VERSION = hsBindgenCli.version;
+    PLAYGROUND_HS_BINDGEN_REVISION = hsBindgenRevision;
+  };
 in
 stdenv.mkDerivation {
   pname = "hs-bindgen-playground";
@@ -45,10 +59,13 @@ stdenv.mkDerivation {
       --prefix PATH : ${lib.makeBinPath runtimeDeps} \
       --set PLAYGROUND_STORE_PATHS ${storePaths} \
       --set PLAYGROUND_STATIC_DIR ${../static} \
-      --set PLAYGROUND_EXAMPLES_DIR ${../examples}
+      --set PLAYGROUND_EXAMPLES_DIR ${../examples} \
+      ${lib.concatStringsSep " " (
+        lib.mapAttrsToList (k: v: "--set ${k} ${lib.escapeShellArg v}") versionEnv
+      )}
   '';
 
-  passthru = { inherit server storePaths; };
+  passthru = { inherit server storePaths versionEnv; };
 
   meta = {
     description = "Web playground for hs-bindgen";

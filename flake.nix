@@ -25,6 +25,12 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
       cliFor = system: hs-bindgen.packages.${system}.hs-bindgen-cli;
+
+      # Identity of a build, shown in the UI header. `shortRev` exists only for
+      # a clean tree; a dirty one gets "<rev>-dirty", which the UI shows without
+      # a commit link. A plain-path (non-git) build has neither.
+      playgroundRevision = self.shortRev or self.dirtyShortRev or "unknown";
+      hsBindgenRevision = hs-bindgen.shortRev or hs-bindgen.dirtyShortRev or "unknown";
     in
     {
       packages = forAllSystems (
@@ -35,6 +41,7 @@
         {
           default = pkgs.callPackage ./nix/package.nix {
             hsBindgenCli = cliFor system;
+            inherit playgroundRevision hsBindgenRevision;
           };
         }
       );
@@ -47,10 +54,13 @@
         in
         {
           default = pkgs.mkShell {
-            # `cabal run` skips the wrapper, so hand it the same sandbox store
-            # allowlist the wrapped binary gets — a dep missing from the closure
-            # then shows up here, not first in the VM test.
-            env.PLAYGROUND_STORE_PATHS = self.packages.${system}.default.storePaths;
+            # `cabal run` skips the wrapper, so hand it what the wrapper sets:
+            # the sandbox store allowlist — a dep missing from the closure then
+            # shows up here, not first in the VM test — and the version strings.
+            env = {
+              PLAYGROUND_STORE_PATHS = self.packages.${system}.default.storePaths;
+            }
+            // self.packages.${system}.default.versionEnv;
 
             # Runtime tools the server shells out to, plus the Haskell toolchain.
             packages = [

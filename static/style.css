@@ -24,10 +24,26 @@ body {
 header {
   padding: 0.6rem 1rem;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
 }
 header h1 { margin: 0; font-size: 1.2rem; }
 .tagline { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
 .tagline a { color: var(--accent); }
+
+/* What is running: one line per component, filled in from /api/config. */
+.versions {
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  text-align: right;
+}
+.versions a { color: var(--accent); }
+.versions .dirty { color: var(--error); }
 
 .banner {
   padding: 0.6rem 1rem;

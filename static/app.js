@@ -72,10 +72,37 @@ document.querySelectorAll(".copy").forEach((btn) => {
   });
 });
 
+// --- Versions -------------------------------------------------------------
+// One line per component: "name version (rev)", the revision linked to its
+// commit when the build came from a clean tree (server sends no commitUrl
+// otherwise).
+function renderVersions(versions) {
+  const box = $("versions");
+  box.replaceChildren();
+  for (const v of versions || []) {
+    const line = document.createElement("div");
+    line.append(`${v.name} ${v.version}`);
+    if (v.revision) {
+      const link = document.createElement(v.commitUrl ? "a" : "span");
+      link.textContent = v.revision;
+      if (v.commitUrl) {
+        link.href = v.commitUrl;
+        link.rel = "noopener";
+      } else {
+        link.className = "dirty";
+        link.title = "built from a tree with uncommitted changes";
+      }
+      line.append(" (", link, ")");
+    }
+    box.appendChild(line);
+  }
+}
+
 // --- Config / banner ------------------------------------------------------
 async function loadConfig() {
   try {
     const cfg = await (await fetch("/api/config")).json();
+    renderVersions(cfg.versions);
     if (cfg.readOnly) {
       const banner = $("banner");
       banner.textContent = cfg.message || "Generation is temporarily disabled.";

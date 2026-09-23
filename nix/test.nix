@@ -30,6 +30,18 @@ pkgs.testers.nixosTest {
     machine.wait_for_unit("caddy.service")
     machine.wait_for_open_port(80)
 
+    # The header's version line comes from /api/config; the same strings are
+    # logged at startup. "dev" means the wrapper failed to set them.
+    print("--- running check: /api/config reports versions ---")
+    cfg = json.loads(machine.succeed("curl -sS http://localhost/api/config"))
+    print(cfg)
+    versions = {v["name"]: v for v in cfg["versions"]}
+    assert set(versions) == {"playground", "hs-bindgen"}, f"unexpected versions: {cfg}"
+    assert all(v["version"] != "dev" for v in versions.values()), f"no version set: {cfg}"
+    journal = machine.succeed("journalctl -u hs-bindgen-playground.service --no-pager")
+    for v in versions.values():
+        assert f"{v['name']} {v['version']}" in journal, f"{v['name']} not in the journal"
+
     # Every shipped example must generate bindings — the exact set the UI serves.
     examples = json.loads(machine.succeed("curl -sS http://localhost/api/examples"))
     assert examples, "server served no examples"

@@ -44,7 +44,7 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
-import System.IO (IOMode (..), hIsTerminalDevice, openFile, stdout)
+import System.IO (IOMode (..), hFlush, hIsTerminalDevice, openFile, stdout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process
   ( CreateProcess (..),
@@ -69,8 +69,30 @@ data Config = Config
     cfgMemBytes :: Integer,
     cfgVerbosity :: Int,
     cfgReadOnly :: Bool,
-    cfgReadOnlyMsg :: Text
+    cfgReadOnlyMsg :: Text,
+    cfgComponents :: [Component]
   }
+
+-- | A versioned part of the running instance, shown in the UI header: this
+-- server and the @hs-bindgen@ it generates with. Both come from the Nix build
+-- (see @nix\/package.nix@), which alone knows the revisions.
+data Component = Component
+  { compName :: Text,
+    compVersion :: Text,
+    compRevision :: Revision,
+    -- | GitHub repository, no trailing slash; @\/commit\/<rev>@ is appended.
+    compRepo :: Text
+  }
+
+-- | The git revision a component was built from.
+data Revision
+  = -- | Built from a clean tree: the commit exists upstream, so link it.
+    CleanRev Text
+  | -- | Built with uncommitted changes; show the base revision, but no link —
+    -- the running code is not what that commit contains.
+    DirtyRev Text
+  | -- | Nix had no revision to report (a build from a plain, non-git path).
+    NoRev
 
 -- | What of the Nix store the sandbox may read.
 data StoreBind
@@ -174,9 +196,12 @@ main = do
   -- Only the friendly URL when interactive; under systemd it'd go to the journal
   -- and "localhost" is wrong there (caddy serves the real domain on 80/443).
   interactive <- hIsTerminalDevice stdout
+  -- Unconditional: it answers "what is deployed?" from the journal too.
+  TIO.putStrLn $ T.intercalate ", " (map displayComponent (cfgComponents cfg))
   when interactive $
     putStrLn $
       "hs-bindgen playground: http://localhost:" <> show (cfgPort cfg) <> "/"
+  hFlush stdout -- a pipe to the journal is block-buffered
   scotty (cfgPort cfg) $ do
     middleware (bodyLimit cfg)
 
@@ -197,7 +222,8 @@ main = do
       json $
         object
           [ "readOnly" .= cfgReadOnly cfg,
-            "message" .= cfgReadOnlyMsg cfg
+            "message" .= cfgReadOnlyMsg cfg,
+            "versions" .= map componentObj (cfgComponents cfg)
           ]
 
     get "/api/examples" $
@@ -553,6 +579,23 @@ contentTypeFor p = case takeExtension p of
 errObj :: Text -> Value
 errObj msg = object ["ok" .= False, "error" .= msg, "diagnostics" .= msg]
 
+-- | A component for the UI: @commitUrl@ is 'Data.Aeson.Null' unless the
+-- revision is clean, so the frontend links exactly when there is a commit to
+-- link to.
+componentObj :: Component -> Value
+componentObj c =
+  object
+    [ "name" .= compName c,
+      "version" .= compVersion c,
+      "revision" .= revision,
+      "commitUrl" .= commitUrl
+    ]
+  where
+    (revision, commitUrl) = case compRevision c of
+      CleanRev r -> (Just r, Just (compRepo c <> "/commit/" <> r))
+      DirtyRev r -> (Just (r <> "-dirty"), Nothing)
+      NoRev -> (Nothing, Nothing)
+
 resultObj :: GenResult -> Value
 resultObj r =
   object
@@ -582,6 +625,49 @@ loadConfig = do
     <*> envInt "PLAYGROUND_VERBOSITY" 2
     <*> envBool "PLAYGROUND_READONLY" False
     <*> (T.pack . fromMaybe "Generation is temporarily disabled." <$> lookupEnv "PLAYGROUND_READONLY_MESSAGE")
+    <*> loadComponents
+
+-- | Read the two components' versions from the environment the Nix wrapper (and
+-- the dev shell) sets. Unset means an unwrapped binary run by hand: say "dev"
+-- rather than invent a version.
+loadComponents :: IO [Component]
+loadComponents =
+  sequence
+    [ component "playground" "PLAYGROUND_VERSION" "PLAYGROUND_REVISION" playgroundRepo,
+      component "hs-bindgen" "PLAYGROUND_HS_BINDGEN_VERSION" "PLAYGROUND_HS_BINDGEN_REVISION" hsBindgenRepo
+    ]
+  where
+    component name verKey revKey repo = do
+      ver <- lookupEnv verKey
+      rev <- lookupEnv revKey
+      pure
+        Component
+          { compName = name,
+            compVersion = maybe "dev" T.pack ver,
+            compRevision = parseRevision (maybe "" T.pack rev),
+            compRepo = repo
+          }
+
+playgroundRepo, hsBindgenRepo :: Text
+playgroundRepo = "https://github.com/dschrempf/hs-bindgen-playground"
+hsBindgenRepo = "https://github.com/well-typed/hs-bindgen"
+
+-- | Classify what Nix reported: @\"\"@\/@\"unknown\"@ (no git), @\"abc1234-dirty\"@
+-- (uncommitted changes), or a plain short revision.
+parseRevision :: Text -> Revision
+parseRevision t
+  | T.null t || t == "unknown" = NoRev
+  | Just base <- T.stripSuffix "-dirty" t = DirtyRev base
+  | otherwise = CleanRev t
+
+-- | @playground 0.1.0 (cabde71)@ — the header line, also logged at startup.
+displayComponent :: Component -> Text
+displayComponent c = compName c <> " " <> compVersion c <> rev
+  where
+    rev = case compRevision c of
+      CleanRev r -> " (" <> r <> ")"
+      DirtyRev r -> " (" <> r <> "-dirty)"
+      NoRev -> ""
 
 -- | Read the sandbox's store allowlist from the file @PLAYGROUND_STORE_PATHS@
 -- names (Nix' @closureInfo@ writes one path per line; @nix\/package.nix@ points

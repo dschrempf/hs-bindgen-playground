@@ -61,6 +61,12 @@ nix flake check                           # eval everything + run the test
 - **Never give the CLI a closed stdout** (`NoStream` in `runCapture`): with fd 1 closed it
   hangs on its error path, so every failed generation stalls until the timeout kills it.
   `/dev/null` is fine; see the comment there.
+- **The version shown in the header comes from Nix, not from the code**: `flake.nix`
+  computes `self.shortRev`/`dirtyShortRev` and the pinned hs-bindgen's rev, `package.nix`
+  turns them into `versionEnv` (`PLAYGROUND_VERSION`, `PLAYGROUND_REVISION`,
+  `PLAYGROUND_HS_BINDGEN_*`) on the wrapper, and the dev shell sets the same attrset.
+  Versions themselves are the derivations' (`server.version`, `hsBindgenCli.version`), so
+  the cabal files stay the single source. Unset → "dev"; a dirty rev is shown unlinked.
 - **After editing `static/`, rebuild the package** — the store snapshots the dir, so a stale
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
