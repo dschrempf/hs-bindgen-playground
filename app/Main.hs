@@ -37,7 +37,7 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
-import System.IO (hIsTerminalDevice, stdout)
+import System.IO (IOMode (..), hIsTerminalDevice, openFile, stdout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process
   ( CreateProcess (..),
@@ -299,15 +299,22 @@ buildArgv cfg req work ownPath =
       ]
 
 -- | Run @cmd args@ capturing its stderr (where the CLI writes diagnostics),
--- decoded leniently as UTF-8. Stdin/stdout are closed; reading stderr to EOF
--- before reaping avoids a full-pipe deadlock.
+-- decoded leniently as UTF-8. Reading stderr to EOF before reaping avoids a
+-- full-pipe deadlock.
+--
+-- Stdin\/stdout go to @\/dev\/null@ rather than 'NoStream', which would *close*
+-- the child's fd 1: with stdout closed the CLI hangs on its error path, so every
+-- failed generation would stall until 'cfgTimeoutSecs' kills it.
 runCapture :: String -> [String] -> IO (ExitCode, Text)
 runCapture cmd args = do
+  -- 'UseHandle' closes these in the parent once the child holds them.
+  devNullIn <- openFile "/dev/null" ReadMode
+  devNullOut <- openFile "/dev/null" WriteMode
   (_, _, mErr, ph) <-
     createProcess
       (proc cmd args)
-        { std_in = NoStream,
-          std_out = NoStream,
+        { std_in = UseHandle devNullIn,
+          std_out = UseHandle devNullOut,
           std_err = CreatePipe,
           close_fds = True
         }

@@ -47,6 +47,9 @@ nix flake check                           # eval everything + run the test
   whether stderr is a terminal, so we just capture stderr off a plain pipe (`runCapture` in
   `Main.hs`) and `app.js` parses the SGR escapes into `.ansi-*` spans. This replaced an
   earlier PTY hack (`ansi-terminal` only emits colour on a tty).
+- **Never give the CLI a closed stdout** (`NoStream` in `runCapture`): with fd 1 closed it
+  hangs on its error path, so every failed generation stalls until the timeout kills it.
+  `/dev/null` is fine; see the comment there.
 - **After editing `static/`, rebuild the package** — the store snapshots the dir, so a stale
   wrapped binary serves old assets (`nix run`/systemd use the store copy).
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
