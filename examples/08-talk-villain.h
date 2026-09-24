@@ -15,6 +15,3 @@ struct surname {
   size_t len;
   char   data[];
 };
-
-struct square;
-struct square *create_square(double side);
