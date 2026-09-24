@@ -24,8 +24,8 @@ function showTab(name) {
 }
 
 // --- Diagnostics colouring ------------------------------------------------
-// The server runs hs-bindgen-cli on a pseudo-terminal so it emits its usual
-// ANSI-coloured diagnostics; we parse the SGR escapes into styled spans. Only
+// The server passes `--color always`, so hs-bindgen-cli emits ANSI-coloured
+// diagnostics even into a pipe; we parse the SGR escapes into styled spans. Only
 // foreground colour and bold are used (`.ansi-*` classes in style.css).
 function renderDiagnostics(text) {
   const code = $("diagnostics-code");
