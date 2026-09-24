@@ -57,7 +57,9 @@
         <label>Module
           <input id="module" type="text" value="Demo" spellcheck="false" />
         </label>
-        <label class="wide">Additional options
+        <label class="wide">
+          <span>Additional options
+            <button type="button" id="help-link" class="help-link" title="Accepted options">?</button></span>
           <input id="options" type="text" spellcheck="false"
                  placeholder="allowlisted preprocess flags, e.g. --select-all --hash-define FOO 1 (quotes group)" />
         </label>
@@ -71,6 +73,7 @@
         <button class="tab active" data-tab="bindings">Bindings</button>
         <button class="tab" data-tab="diagnostics">Diagnostics</button>
         <button class="tab" data-tab="command">Command</button>
+        <button class="tab" data-tab="help">Help</button>
       </nav>
 
       <div class="tab-panel active" data-panel="bindings">
@@ -83,6 +86,15 @@
       <div class="tab-panel" data-panel="command">
         <button class="copy" data-copy="command-code">Copy</button>
         <pre><code id="command-code"></code></pre>
+      </div>
+      <div class="tab-panel" data-panel="help">
+        <div class="help">
+          <p>Flags accepted in <em>Additional options</em>, described by
+            <code>hs-bindgen-cli preprocess --help</code>. The controls set the
+            rest of the invocation; the Command tab shows it in full. See also the
+            <a href="https://github.com/well-typed/hs-bindgen/tree/main/manual">manual</a>.</p>
+          <dl id="help-options"></dl>
+        </div>
       </div>
     </section>
   </main>

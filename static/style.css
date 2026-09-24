@@ -102,6 +102,30 @@ main {
 .controls label.wide { flex: 1 1 100%; }
 .controls label.wide input { width: 100%; }
 
+.help-link {
+  background: var(--panel);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  margin-left: 0.3rem;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+.help-link:hover { border-color: var(--accent); }
+
+/* Prose, unlike the other panels' <pre>: it wraps. */
+.help { padding: 0.8rem; font-size: 0.85rem; line-height: 1.5; }
+.help p { margin: 0 0 1rem; color: var(--muted); }
+.help a { color: var(--accent); }
+.help code { font-family: ui-monospace, "SF Mono", Menlo, monospace; white-space: normal; }
+.help dt code { color: var(--accent); }
+.help dd { margin: 0.1rem 0 0.8rem 1.2rem; }
+
 .pane-input .CodeMirror {
   flex: 1;
   height: auto;

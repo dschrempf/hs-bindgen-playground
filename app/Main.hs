@@ -44,13 +44,14 @@ import System.Directory
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (replaceExtension, takeExtension, (</>))
-import System.IO (IOMode (..), hFlush, hIsTerminalDevice, openFile, stdout)
+import System.IO (IOMode (..), hFlush, hIsTerminalDevice, openFile, stderr, stdout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
     createProcess,
     proc,
+    readProcessWithExitCode,
     waitForProcess,
   )
 import Web.Scotty
@@ -112,6 +113,13 @@ data Example = Example
     exBody :: Text,
     -- | Preselected additional options, from a sibling @.opts@ file; empty if absent.
     exOptions :: Text
+  }
+
+-- | One accepted extra option, as the CLI's @preprocess --help@ describes it.
+data HelpEntry = HelpEntry
+  { -- | Flag and metavariables, e.g. @--hash-define NAME VALUE@.
+    helpUsage :: Text,
+    helpDescription :: Text
   }
 
 -- | A parsed generation request from the frontend.
@@ -195,6 +203,7 @@ main = do
   cfg <- loadConfig
   gate <- newGate (cfgMaxConcurrent cfg)
   examples <- loadExamples (cfgExamplesDir cfg)
+  help <- loadHelp (cfgCli cfg)
   let assetVersion = assetVersionOf (cfgStaticDir cfg)
   index <- loadIndex assetVersion (cfgStaticDir cfg)
   -- Only the friendly URL when interactive; under systemd it'd go to the journal
@@ -234,6 +243,12 @@ main = do
       json
         [ object ["name" .= exName e, "body" .= exBody e, "options" .= exOptions e]
         | e <- examples
+        ]
+
+    get "/api/help" $
+      json
+        [ object ["usage" .= helpUsage e, "description" .= helpDescription e]
+        | e <- help
         ]
 
     post "/api/generate" $ handleGenerate cfg gate
@@ -351,12 +366,8 @@ parseExtraOpts = go . map T.pack . splitArgs
     go [] = Right []
     go (tok : rest) = case lookup tok allowedOpts of
       Nothing ->
-        Left $
-          "Option not allowed: "
-            <> tok
-            <> ". Accepted: "
-            <> T.intercalate ", " (map fst allowedOpts)
-            <> "."
+        -- Diagnostics don't wrap, so name the list rather than inline it.
+        Left $ "Option not allowed: " <> tok <> ". The Help tab lists the accepted ones."
       Just n
         | length args < n ->
             Left $ tok <> " takes " <> tshow n <> " argument(s)."
@@ -766,6 +777,65 @@ loadExamples dir = do
       let base = fromMaybe n (T.stripSuffix ".h" n)
           noNum = T.dropWhile (`elem` ['0' .. '9']) base
        in fromMaybe noNum (T.stripPrefix "-" noNum)
+
+-- | Describe 'allowedOpts' in the pinned CLI's own words, in its help's order.
+-- Warns about an allowlisted flag the help lacks or gives another argument
+-- count: a bump renamed or changed it. Runs outside the sandbox; the argv is fixed.
+loadHelp :: FilePath -> IO [HelpEntry]
+loadHelp cli = do
+  (ec, out, err) <- readProcessWithExitCode cli ["preprocess", "--help"] ""
+  case ec of
+    ExitFailure n -> do
+      warn $ "`preprocess --help` exited with " <> tshow n <> ": " <> T.pack err
+      pure []
+    ExitSuccess -> do
+      let entries = parseHelp (T.pack out)
+          described = [(f, e) | e <- entries, f <- helpFlags e]
+      mapM_ (checkAllowed described) allowedOpts
+      pure [e | e <- entries, any (`elem` map fst allowedOpts) (helpFlags e)]
+  where
+    checkAllowed described (flag, n) = case lookup flag described of
+      Nothing -> warn $ "allowlisted " <> flag <> " is missing from `preprocess --help`"
+      Just e
+        | helpArity e /= n ->
+            warn $ "allowlisted " <> flag <> " takes " <> tshow n <> " argument(s), help says: " <> helpUsage e
+        | otherwise -> pure ()
+    warn msg = TIO.hPutStrLn stderr ("warning: " <> msg)
+
+-- | Names of the option, e.g. @[\"-v\", \"--verbosity\"]@ for @-v,--verbosity INT@.
+helpFlags :: HelpEntry -> [Text]
+helpFlags e = case T.words (helpUsage e) of
+  names : _ -> T.splitOn "," names
+  [] -> []
+
+helpArity :: HelpEntry -> Int
+helpArity e = max 0 (length (T.words (helpUsage e)) - 1)
+
+-- | The entries of optparse-applicative's @Available options:@ section. An
+-- entry starts at a two-space indent; its description starts at a fixed column,
+-- on the next line if the usage reaches it, and continues at that indent.
+-- Splitting at the column, not at a run of spaces: a usage that just fits is
+-- followed by a single space. A misparse shows up as 'loadHelp's arity warning.
+parseHelp :: Text -> [HelpEntry]
+parseHelp help = case filter (> 2) (map indent section) of
+  [] -> []
+  col : _ -> entries col section
+  where
+    section =
+      takeWhile (not . T.null . T.strip) . drop 1 $
+        dropWhile ((/= "Available options:") . T.strip) (T.lines help)
+    indent = T.length . T.takeWhile (== ' ')
+    entries _ [] = []
+    entries col (l : ls) =
+      let (cont, rest) = span ((> 2) . indent) ls
+          (usage, desc)
+            | T.length l > col && T.index l (col - 1) == ' ' = T.splitAt col l
+            | otherwise = (l, "")
+       in HelpEntry
+            { helpUsage = T.strip usage,
+              helpDescription = T.unwords (concatMap T.words (desc : cont))
+            }
+            : entries col rest
 
 -- Small utilities -----------------------------------------------------------
 

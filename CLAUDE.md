@@ -51,6 +51,9 @@ nix flake check                           # eval everything + run the test
   known `preprocess` flags plus their argument count. Nothing that names a file, reaches
   clang (`--clang-option*`, `-I`), or duplicates a flag `cliArgs` fixes. Add new flags
   there; the UI placeholder in `index.html` is the only other place that mentions them.
+  The Help tab (`/api/help`) describes them with the CLI's own text: `loadHelp` runs
+  `preprocess --help` once at startup, outside bwrap, and warns about an allowlisted
+  flag the help lacks or gives another arity; the nixosTest fails on that warning.
 - **systemd hardening vs bwrap** (in `module.nix`): `RestrictAddressFamilies` must include
   `AF_NETLINK` (bwrap loopback), and never set `ProtectKernelTunables`/`ProtectControlGroups`/
   `ProtectProc`/`RestrictNamespaces`/a `SystemCallFilter` blocking clone/unshare/mount — they

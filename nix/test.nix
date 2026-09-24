@@ -98,5 +98,13 @@ pkgs.testers.nixosTest {
     denied = post({"source": "int x;", "options": "--clang-option=-I/etc"})
     print(denied)
     assert "Option not allowed" in denied, "clang passthrough should be rejected"
+
+    # The Help tab describes the allowlist from the CLI's own help; the server
+    # warns at startup about an allowlisted flag that help lacks (a bump).
+    print("--- running check: /api/help describes the allowlist ---")
+    help = json.loads(machine.succeed("curl -sS http://localhost/api/help"))
+    assert any(e["usage"] == "--hash-define NAME VALUE" for e in help), f"unexpected help: {help}"
+    journal = machine.succeed("journalctl -u hs-bindgen-playground.service --no-pager")
+    assert "warning: allowlisted" not in journal, "allowlist out of sync with `preprocess --help`"
   '';
 }

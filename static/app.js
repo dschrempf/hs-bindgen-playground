@@ -133,6 +133,28 @@ async function loadExamples() {
   });
 }
 
+// --- Help -----------------------------------------------------------------
+async function loadHelp() {
+  const list = $("help-options");
+  try {
+    const entries = await (await fetch("/api/help")).json();
+    for (const e of entries) {
+      const dt = document.createElement("dt");
+      const code = document.createElement("code");
+      code.textContent = e.usage;
+      dt.appendChild(code);
+      const dd = document.createElement("dd");
+      dd.textContent = e.description;
+      list.append(dt, dd);
+    }
+    if (!entries.length) list.textContent = "The option descriptions are unavailable.";
+  } catch (_) {
+    list.textContent = "The option descriptions failed to load.";
+  }
+}
+
+$("help-link").addEventListener("click", () => showTab("help"));
+
 // --- Generate -------------------------------------------------------------
 async function generate() {
   const btn = $("generate");
@@ -189,3 +211,4 @@ $("generate").addEventListener("click", generate);
 
 loadConfig();
 loadExamples();
+loadHelp();
