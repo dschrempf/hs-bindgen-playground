@@ -132,8 +132,16 @@ main {
   font-size: 0.9rem;
 }
 
-#generate {
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
   margin: 0.6rem 0.8rem;
+}
+
+#generate {
+  flex: 1;
   padding: 0.6rem;
   background: var(--accent);
   color: var(--accent-fg);
@@ -144,6 +152,21 @@ main {
   cursor: pointer;
 }
 #generate:disabled { opacity: 0.5; cursor: wait; }
+
+#share {
+  padding: 0.6rem 1rem;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+#share:hover { border-color: var(--accent); }
+
+.share-status { flex: 1 1 100%; font-size: 0.75rem; color: var(--muted); }
+.share-status:empty { display: none; }
+.share-status.warn { color: var(--error); }
 
 .tabs {
   display: flex;

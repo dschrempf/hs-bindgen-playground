@@ -83,6 +83,10 @@ nix flake check                           # eval everything + run the test
   versioned. `static/vendor/**` stays unversioned but `immutable`, an invariant: replace
   a vendored bundle under a new file name, never in place. A new asset needs no
   registration; any `"/static/…"` link in `index.html` is rewritten at startup.
+- **Share links live in the URL fragment** (`shareFields` in `app.js`): the form's
+  non-default fields as URL parameters plus `v=1`, never sent to the server. Old links
+  must keep decoding: a new field is fine (absent → default), a changed meaning needs a
+  new `v`.
 - **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
   `nix flake update hs-bindgen`.
 - `checks.integration` (the nixosTest) is defined for both Linux systems; it's

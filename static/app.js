@@ -155,6 +155,101 @@ async function loadHelp() {
 
 $("help-link").addEventListener("click", () => showTab("help"));
 
+// --- Share ----------------------------------------------------------------
+// A link carries the form in its fragment, which never reaches the server: the
+// fields that differ from the page's defaults as URL parameters, plus the format
+// version `v`. Decoding sets every field, falling back to its default when the
+// link omits it or holds a value the control can't take.
+const SHARE_VERSION = "1";
+// Browsers take megabytes; some chat and mail clients truncate far earlier.
+const SHARE_WARN_LENGTH = 8000;
+
+function selectField(id) {
+  const el = $(id);
+  return {
+    get: () => el.value,
+    set: (v) => { el.value = v; },
+    valid: (v) => [...el.options].some((o) => o.value === v),
+    initial: ([...el.options].find((o) => o.defaultSelected) || el.options[0]).value,
+  };
+}
+
+function checkField(id) {
+  const el = $(id);
+  return {
+    get: () => (el.checked ? "1" : "0"),
+    set: (v) => { el.checked = v === "1"; },
+    valid: (v) => v === "0" || v === "1",
+    initial: el.defaultChecked ? "1" : "0",
+  };
+}
+
+function textField(id) {
+  const el = $(id);
+  return {
+    get: () => el.value,
+    set: (v) => { el.value = v; },
+    valid: () => true,
+    initial: el.defaultValue,
+  };
+}
+
+const shareFields = {
+  source: {
+    get: () => editor.getValue(),
+    set: (v) => editor.setValue(v),
+    valid: () => true,
+    initial: $("source").defaultValue,
+  },
+  std: selectField("std"),
+  safe: selectField("safe"),
+  verbosity: selectField("verbosity"),
+  macroWarnings: checkField("macroWarnings"),
+  module: textField("module"),
+  options: textField("options"),
+};
+
+function encodeShare() {
+  const params = new URLSearchParams({ v: SHARE_VERSION });
+  for (const [key, field] of Object.entries(shareFields)) {
+    const value = field.get();
+    if (value !== field.initial) params.set(key, value);
+  }
+  return params.toString();
+}
+
+function applyShare(fragment) {
+  const params = new URLSearchParams(fragment);
+  if (params.get("v") !== SHARE_VERSION) return;
+  for (const [key, field] of Object.entries(shareFields)) {
+    const value = params.get(key);
+    field.set(value !== null && field.valid(value) ? value : field.initial);
+  }
+}
+
+let shareStatusTimer;
+$("share").addEventListener("click", async () => {
+  history.replaceState(null, "", "#" + encodeShare());
+  const url = location.href;
+  let msg;
+  try {
+    await navigator.clipboard.writeText(url);
+    msg = "Link copied.";
+  } catch (_) {
+    msg = "Copying failed; the link is in the address bar.";
+  }
+  const long = url.length > SHARE_WARN_LENGTH;
+  if (long) msg += ` It is ${url.length} characters long; some apps truncate links that long.`;
+  const status = $("share-status");
+  status.textContent = msg;
+  status.classList.toggle("warn", long);
+  clearTimeout(shareStatusTimer);
+  shareStatusTimer = setTimeout(() => (status.textContent = ""), long ? 8000 : 2000);
+});
+
+// A shared link pasted into this tab changes only the fragment: no reload.
+window.addEventListener("hashchange", () => applyShare(location.hash.slice(1)));
+
 // --- Generate -------------------------------------------------------------
 async function generate() {
   const btn = $("generate");
@@ -209,6 +304,7 @@ async function generate() {
 
 $("generate").addEventListener("click", generate);
 
+applyShare(location.hash.slice(1));
 loadConfig();
 loadExamples();
 loadHelp();
