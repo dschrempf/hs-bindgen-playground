@@ -26,6 +26,8 @@ nix flake check                           # eval everything + run the test
 - `nix/test.nix` — the nixosTest. `nix/hetzner.nix` — nixos-anywhere target (disko).
 - `static/` — hand-written HTML/CSS/JS + vendored CodeMirror/highlight.js under `vendor/`.
 - `examples/*.h` — dropdown examples, read at startup; label = filename sans `NN-` and `.h`.
+  An optional sibling `NN-name.opts` fills the additional-options field on selection
+  (the talk examples use it for `--omit-field-prefixes`).
 
 ## Non-obvious things
 

@@ -43,7 +43,7 @@ import System.Directory
   )
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeExtension, (</>))
+import System.FilePath (replaceExtension, takeExtension, (</>))
 import System.IO (IOMode (..), hFlush, hIsTerminalDevice, openFile, stdout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process
@@ -109,7 +109,9 @@ data StoreBind
 -- | A curated example header shown in the UI dropdown.
 data Example = Example
   { exName :: Text,
-    exBody :: Text
+    exBody :: Text,
+    -- | Preselected additional options, from a sibling @.opts@ file; empty if absent.
+    exOptions :: Text
   }
 
 -- | A parsed generation request from the frontend.
@@ -228,7 +230,10 @@ main = do
           ]
 
     get "/api/examples" $
-      json [object ["name" .= exName e, "body" .= exBody e] | e <- examples]
+      json
+        [ object ["name" .= exName e, "body" .= exBody e, "options" .= exOptions e]
+        | e <- examples
+        ]
 
     post "/api/generate" $ handleGenerate cfg gate
 
@@ -700,6 +705,7 @@ loadStoreBind =
       pure $ BindClosure [T.unpack l | l <- ls, not (T.null l)]
 
 -- | Load @*.h@ examples, sorted by filename; label strips a leading @NN-@ and @.h@.
+-- An optional @NN-name.opts@ next to the header preselects its additional options.
 loadExamples :: FilePath -> IO [Example]
 loadExamples dir = do
   names <- sort . filter ((== ".h") . takeExtension) <$> listDirectory dir
@@ -707,7 +713,10 @@ loadExamples dir = do
   where
     readOne n = do
       contents <- TIO.readFile (dir </> n)
-      pure Example {exName = label (T.pack n), exBody = contents}
+      let optsFile = dir </> replaceExtension n "opts"
+      hasOpts <- doesFileExist optsFile
+      opts <- if hasOpts then T.strip <$> TIO.readFile optsFile else pure ""
+      pure Example {exName = label (T.pack n), exBody = contents, exOptions = opts}
     label n =
       let base = fromMaybe n (T.stripSuffix ".h" n)
           noNum = T.dropWhile (`elem` ['0' .. '9']) base

@@ -121,11 +121,15 @@ async function loadExamples() {
     opt.value = ex.name;
     opt.textContent = ex.name;
     opt.dataset.body = ex.body;
+    opt.dataset.options = ex.options;
     sel.appendChild(opt);
   }
   sel.addEventListener("change", () => {
     const opt = sel.selectedOptions[0];
-    if (opt && opt.dataset.body !== undefined) editor.setValue(opt.dataset.body);
+    if (opt && opt.dataset.body !== undefined) {
+      editor.setValue(opt.dataset.body);
+      $("options").value = opt.dataset.options;
+    }
   });
 }
 

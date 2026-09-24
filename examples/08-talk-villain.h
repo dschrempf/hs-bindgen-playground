@@ -2,7 +2,7 @@
 
 #define SQUARE(x) ((x) * (x))
 #define MASK (1u << 31)
-#define TWO_G (2 * 1024 * 1024 * 1024)
+#define OOPS (1 << 31)
 
 struct blinds {
   char window_id;
