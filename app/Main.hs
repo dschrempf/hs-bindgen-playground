@@ -195,6 +195,8 @@ main = do
   cfg <- loadConfig
   gate <- newGate (cfgMaxConcurrent cfg)
   examples <- loadExamples (cfgExamplesDir cfg)
+  let assetVersion = assetVersionOf (cfgStaticDir cfg)
+  index <- loadIndex assetVersion (cfgStaticDir cfg)
   -- Only the friendly URL when interactive; under systemd it'd go to the journal
   -- and "localhost" is wrong there (caddy serves the real domain on 80/443).
   interactive <- hIsTerminalDevice stdout
@@ -215,11 +217,10 @@ main = do
       json $ errObj ("Request too large (limit " <> tshow maxLen <> " bytes).")
 
     get "/" $ do
-      setHeader "Content-Type" "text/html; charset=utf-8"
-      setHeader "Cache-Control" (cachePolicyFor "index.html")
-      file (cfgStaticDir cfg </> "index.html")
+      setHeader "Cache-Control" (cacheControl Revalidate)
+      html index
 
-    staticRoute (cfgStaticDir cfg)
+    staticRoute assetVersion (cfgStaticDir cfg)
 
     get "/api/config" $
       json $
@@ -556,12 +557,48 @@ displayCommand job =
 
 -- Serving static assets -----------------------------------------------------
 
+-- Everything the store snapshots has a 1970 mtime, and Warp answers a
+-- conditional request for a 'file' from that mtime: always 304. Revalidation
+-- therefore can never replace a stale copy (Cloudflare kept the pre-deploy
+-- @app.js@ despite @no-cache@), so nothing relies on it. The page is served
+-- from memory, without a validator, and names our own assets by a versioned URL
+-- that changes with their content.
+
+-- | Cache-busting tag for our own assets.
+data AssetVersion
+  = -- | Hash part of the static dir's store path; it changes whenever any asset does.
+    StoreHash Text
+  | -- | A mutable checkout (the dev shell): real mtimes, and no CDN in front.
+    Unversioned
+
+assetVersionOf :: FilePath -> AssetVersion
+assetVersionOf dir = case T.stripPrefix "/nix/store/" (T.pack dir) of
+  Just rest | h <- T.takeWhile (/= '-') rest, not (T.null h) -> StoreHash h
+  _ -> Unversioned
+
+-- | Read @index.html@, appending @?v=@ to each of our own @\/static\/@ links.
+-- Vendored bundles keep their plain name (see 'assetPolicy').
+loadIndex :: AssetVersion -> FilePath -> IO TL.Text
+loadIndex ver dir = do
+  page <- TIO.readFile (dir </> "index.html")
+  pure . TL.fromStrict $ case ver of
+    Unversioned -> page
+    StoreHash h -> case T.splitOn prefix page of
+      first : rest -> T.concat (first : map ((prefix <>) . tag h) rest)
+      [] -> page
+  where
+    prefix = "\"/static/"
+    tag h s
+      | "vendor/" `T.isPrefixOf` s = s
+      | otherwise = let (path, after) = T.break (== '"') s in path <> "?v=" <> h <> after
+
 -- | Serve @\/static\/**@ from @dir@, rejecting path traversal.
-staticRoute :: FilePath -> ScottyM ()
-staticRoute dir = get (function matcher) $ do
+staticRoute :: AssetVersion -> FilePath -> ScottyM ()
+staticRoute ver dir = get (function matcher) $ do
   rel <- captureParam "rel"
+  requested <- queryParamMaybe "v"
   setHeader "Content-Type" (contentTypeFor (T.unpack rel))
-  setHeader "Cache-Control" (cachePolicyFor rel)
+  setHeader "Cache-Control" (cacheControl (assetPolicy ver requested rel))
   file (dir </> T.unpack rel)
   where
     matcher r = case pathInfo r of
@@ -571,21 +608,29 @@ staticRoute dir = get (function matcher) $ do
       _ -> Nothing
     safeSeg s = not (T.null s) && s /= ".." && not (T.any (== '/') s)
 
--- | How long a cache may keep an asset, by path relative to the static dir.
+data CachePolicy
+  = -- | Ask the origin before each reuse.
+    Revalidate
+  | -- | Keep for a year; the URL changes when the content does.
+    Immutable
+
+cacheControl :: CachePolicy -> TL.Text
+cacheControl = \case
+  Revalidate -> "no-cache"
+  Immutable -> "public, max-age=31536000, immutable"
+
+-- | Policy for an asset, by path relative to the static dir and the @v@ it was
+-- requested with. Only the current version is immutable: an old @v@ gets
+-- today's content, which must not be pinned under yesterday's URL.
 --
--- Everything the store snapshots has a 1970 mtime, so a conditional request can
--- never disprove a stale copy; without an explicit policy a browser's heuristic
--- freshness keeps an asset essentially forever, and a fronting CDN invents its
--- own TTL (Cloudflare pinned @app.js@ for hours past a deploy). Hence
--- @no-cache@: revalidate every time, and the CDN stays out of it.
---
--- Vendored bundles are exempt — they are big and change only with a version
--- bump. That makes it an invariant: replace one under a new file name, or the
--- year-long copies in the wild never notice.
-cachePolicyFor :: Text -> TL.Text
-cachePolicyFor rel
-  | "vendor/" `T.isPrefixOf` rel = "public, max-age=31536000, immutable"
-  | otherwise = "no-cache"
+-- Vendored bundles are immutable under their plain name. That makes it an
+-- invariant: replace one under a new file name, or the year-long copies in the
+-- wild never notice.
+assetPolicy :: AssetVersion -> Maybe Text -> Text -> CachePolicy
+assetPolicy ver requested rel
+  | "vendor/" `T.isPrefixOf` rel = Immutable
+  | StoreHash h <- ver, requested == Just h = Immutable
+  | otherwise = Revalidate
 
 contentTypeFor :: FilePath -> TL.Text
 contentTypeFor p = case takeExtension p of
