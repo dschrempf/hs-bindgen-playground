@@ -87,6 +87,16 @@
 
       nixosModules.default = import ./nix/module.nix self;
 
+      # A Hetzner Cloud host running the playground, minus its host-specific
+      # values; see nix/hetzner.nix.
+      nixosModules.hetzner = {
+        imports = [
+          disko.nixosModules.disko
+          self.nixosModules.default
+          ./nix/hetzner.nix
+        ];
+      };
+
       # The integration test is a nixosTest, so it runs on any Linux natively.
       # `nix flake check` only builds the current system's checks, so on x86 CI
       # it never tries to build the aarch64 VM (which x86 can't do anyway).
@@ -94,16 +104,18 @@
         integration = (pkgsFor system).callPackage ./nix/test.nix {
           module = self.nixosModules.default;
         };
+        # Builds the Hetzner profile; real hosts live in a private flake.
+        hetzner =
+          (nixpkgs.lib.nixosSystem {
+            modules = [
+              self.nixosModules.hetzner
+              {
+                nixpkgs.hostPlatform = system;
+                users.users.root.openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAA... placeholder" ];
+                system.stateVersion = nixpkgs.lib.trivial.release;
+              }
+            ];
+          }).config.system.build.toplevel;
       });
-
-      # Example deployment host for nixos-anywhere; see nix/hetzner.nix.
-      nixosConfigurations.hetzner = nixpkgs.lib.nixosSystem {
-        modules = [
-          { nixpkgs.hostPlatform = "x86_64-linux"; }
-          disko.nixosModules.disko
-          self.nixosModules.default
-          ./nix/hetzner.nix
-        ];
-      };
     };
 }

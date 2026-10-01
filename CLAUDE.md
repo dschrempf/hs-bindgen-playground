@@ -23,7 +23,10 @@ nix flake check                           # eval everything + run the test
 - `nix/module.nix` — NixOS module (hardened systemd unit + optional caddy/ACME).
   Applied as `nixosModules.default`; it takes `self` partially applied.
   `reverseProxy.enable = false` drops caddy for hosts that terminate TLS themselves.
-- `nix/test.nix` — the nixosTest. `nix/hetzner.nix` — nixos-anywhere target (disko).
+- `nix/test.nix` — the nixosTest. `nix/hetzner.nix` — Hetzner host profile (disko,
+  hybrid BIOS/UEFI GRUB), exported as `nixosModules.hetzner`. The real host lives in a
+  private flake, `../hs-bindgen-playground-deploy`; `checks.<system>.hetzner` builds
+  the profile with a placeholder key.
 - `static/` — hand-written HTML/CSS/JS + vendored CodeMirror/highlight.js under `vendor/`.
 - `examples/*.h` — dropdown examples, read at startup; label = filename sans `NN-` and `.h`.
   An optional sibling `NN-name.opts` fills the additional-options field on selection

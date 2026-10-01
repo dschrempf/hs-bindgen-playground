@@ -90,11 +90,13 @@ services.hs-bindgen-playground = {
 
 ### Fresh Hetzner Cloud VM (talk duration)
 
-Rent any Cloud VM, then from your laptop (see `nix/hetzner.nix` — fill in the
-SSH key and, once DNS is ready, the domain):
+Rent any Cloud VM. In your own flake, import `nixosModules.hetzner` and add
+the host-specific values: root SSH keys, `nixpkgs.hostPlatform`,
+`system.stateVersion`, optionally static IPv6 and, once DNS is ready, the
+domain (see `nix/hetzner.nix`). Then from your laptop:
 
 ```sh
-nixos-anywhere --flake .#hetzner root@<IP>
+nixos-anywhere --flake <your-flake>#<host> root@<IP>
 ```
 
 ## Layout
@@ -106,5 +108,5 @@ examples/*.h       curated example headers (dropdown)
 nix/package.nix    wrapped server derivation
 nix/module.nix     NixOS module (hardened service + optional caddy/ACME)
 nix/test.nix       nixosTest integration check
-nix/hetzner.nix    nixos-anywhere target (disko)
+nix/hetzner.nix    Hetzner Cloud host profile for nixos-anywhere (disko)
 ```
