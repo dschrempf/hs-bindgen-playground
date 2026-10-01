@@ -54,6 +54,9 @@
     # The removable path needs no EFI boot entry, which the BIOS boot of this
     # very install cannot register.
     efiInstallAsRemovable = true;
+    # GRUB copies each kernel + initrd (~42M) to the 512M ESP above; the
+    # default of 100 generations would fill it.
+    configurationLimit = lib.mkDefault 10;
   };
 
   networking.hostName = lib.mkDefault "hs-bindgen-playground";
