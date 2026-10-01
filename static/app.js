@@ -105,7 +105,7 @@ async function loadConfig() {
     renderVersions(cfg.versions);
     if (cfg.readOnly) {
       const banner = $("banner");
-      banner.textContent = cfg.message || "Generation is temporarily disabled.";
+      banner.textContent = cfg.readOnly;
       banner.hidden = false;
       $("generate").disabled = true;
     }

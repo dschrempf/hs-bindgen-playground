@@ -38,6 +38,7 @@ pkgs.testers.nixosTest {
     versions = {v["name"]: v for v in cfg["versions"]}
     assert set(versions) == {"playground", "hs-bindgen"}, f"unexpected versions: {cfg}"
     assert all(v["version"] != "dev" for v in versions.values()), f"no version set: {cfg}"
+    assert cfg["readOnly"] is None, f"read-only while generation is enabled: {cfg}"
     journal = machine.succeed("journalctl -u hs-bindgen-playground.service --no-pager")
     for v in versions.values():
         assert f"{v['name']} {v['version']}" in journal, f"{v['name']} not in the journal"

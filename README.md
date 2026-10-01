@@ -46,7 +46,7 @@ cabal run              # or: nix run .#   (server on http://localhost:3000)
 | `PLAYGROUND_MEMORY_BYTES` | `2147483648` | Address-space cap per job |
 | `PLAYGROUND_VERBOSITY` | `2` | hs-bindgen-cli verbosity (0–4) |
 | `PLAYGROUND_READONLY` | `false` | Kill switch: disable generation |
-| `PLAYGROUND_READONLY_MESSAGE` | — | Banner text when read-only |
+| `PLAYGROUND_READONLY_MESSAGE` | — | Banner text when read-only; unset or empty keeps the server's default |
 
 ## Test
 

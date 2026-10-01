@@ -112,9 +112,9 @@ in
     };
 
     readOnlyMessage = lib.mkOption {
-      type = lib.types.str;
-      default = "Generation is temporarily disabled.";
-      description = "Banner text shown when `readOnly` is set.";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Banner text shown when `readOnly` is set; `null` keeps the server's default.";
     };
 
     reverseProxy.enable = lib.mkOption {
@@ -159,6 +159,8 @@ in
         PLAYGROUND_MEMORY_BYTES = toString cfg.memoryBytes;
         PLAYGROUND_VERBOSITY = toString cfg.verbosity;
         PLAYGROUND_READONLY = lib.boolToString cfg.readOnly;
+      }
+      // lib.optionalAttrs (cfg.readOnlyMessage != null) {
         PLAYGROUND_READONLY_MESSAGE = cfg.readOnlyMessage;
       };
 

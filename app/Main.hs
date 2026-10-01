@@ -69,8 +69,7 @@ data Config = Config
     -- | prlimit --as (address space)
     cfgMemBytes :: Integer,
     cfgVerbosity :: Int,
-    cfgReadOnly :: Bool,
-    cfgReadOnlyMsg :: Text,
+    cfgGeneration :: Generation,
     cfgComponents :: [Component]
   }
 
@@ -84,6 +83,12 @@ data Component = Component
     -- | GitHub repository, no trailing slash; @\/commit\/<rev>@ is appended.
     compRepo :: Text
   }
+
+-- | Whether @POST \/api\/generate@ runs, the kill switch @PLAYGROUND_READONLY@.
+data Generation
+  = Enabled
+  | -- | Refuse generation; the text is the banner the UI shows.
+    Disabled Text
 
 -- | The git revision a component was built from.
 data Revision
@@ -234,8 +239,9 @@ main = do
     get "/api/config" $
       json $
         object
-          [ "readOnly" .= cfgReadOnly cfg,
-            "message" .= cfgReadOnlyMsg cfg,
+          [ "readOnly" .= case cfgGeneration cfg of
+              Enabled -> Nothing
+              Disabled msg -> Just msg,
             "versions" .= map componentObj (cfgComponents cfg)
           ]
 
@@ -269,33 +275,33 @@ bodyLimit cfg =
 
 -- | The @POST \/api\/generate@ handler: validate, gate, run, respond.
 handleGenerate :: Config -> Gate -> ActionM ()
-handleGenerate cfg gate
-  | cfgReadOnly cfg = do
-      status status503
-      json $ errObj (cfgReadOnlyMsg cfg)
-  | otherwise = do
-      req <- jsonData
-      let srcBytes = BS.length (TE.encodeUtf8 (reqSource req))
-      if srcBytes > cfgMaxInputBytes cfg
-        then do
-          status status413
-          json . errObj $
-            "Input too large ("
-              <> tshow srcBytes
-              <> " bytes; limit "
-              <> tshow (cfgMaxInputBytes cfg)
-              <> ")."
-        else case validate cfg req of
-          Left msg -> do
-            status status403
-            json (errObj msg)
-          Right job -> do
-            mres <- liftIO $ withGate gate (runGenerate cfg job)
-            case mres of
-              Nothing -> do
-                status status503
-                json (errObj "Server busy — please try again in a moment.")
-              Just res -> json (resultObj res)
+handleGenerate cfg gate = case cfgGeneration cfg of
+  Disabled msg -> do
+    status status503
+    json $ errObj msg
+  Enabled -> do
+    req <- jsonData
+    let srcBytes = BS.length (TE.encodeUtf8 (reqSource req))
+    if srcBytes > cfgMaxInputBytes cfg
+      then do
+        status status413
+        json . errObj $
+          "Input too large ("
+            <> tshow srcBytes
+            <> " bytes; limit "
+            <> tshow (cfgMaxInputBytes cfg)
+            <> ")."
+      else case validate cfg req of
+        Left msg -> do
+          status status403
+          json (errObj msg)
+        Right job -> do
+          mres <- liftIO $ withGate gate (runGenerate cfg job)
+          case mres of
+            Nothing -> do
+              status status503
+              json (errObj "Server busy — please try again in a moment.")
+            Just res -> json (resultObj res)
 
 -- | Turn a wire 'GenReq' into a 'Job', rejecting anything the CLI shouldn't see.
 validate :: Config -> GenReq -> Either Text Job
@@ -702,9 +708,19 @@ loadConfig = do
     <*> envInt "PLAYGROUND_TIMEOUT_SECONDS" 10
     <*> envInteger "PLAYGROUND_MEMORY_BYTES" 2147483648
     <*> envInt "PLAYGROUND_VERBOSITY" 2
-    <*> envBool "PLAYGROUND_READONLY" False
-    <*> (T.pack . fromMaybe "Generation is temporarily disabled." <$> lookupEnv "PLAYGROUND_READONLY_MESSAGE")
+    <*> loadGeneration
     <*> loadComponents
+
+-- | An empty message counts as unset: the UI shows the banner only for a
+-- non-empty one.
+loadGeneration :: IO Generation
+loadGeneration = do
+  readOnly <- envBool "PLAYGROUND_READONLY" False
+  msg <- maybe "" T.pack <$> lookupEnv "PLAYGROUND_READONLY_MESSAGE"
+  pure $
+    if readOnly
+      then Disabled (if T.null msg then "Generation is temporarily disabled." else msg)
+      else Enabled
 
 -- | Read the two components' versions from the environment the Nix wrapper (and
 -- the dev shell) sets. Unset means an unwrapped binary run by hand: say "dev"
