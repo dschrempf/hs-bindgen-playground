@@ -121,14 +121,14 @@ async function loadExamples() {
     opt.value = ex.name;
     opt.textContent = ex.name;
     opt.dataset.body = ex.body;
-    opt.dataset.options = ex.options;
+    if (ex.options !== null) opt.dataset.options = ex.options;
     sel.appendChild(opt);
   }
   sel.addEventListener("change", () => {
     const opt = sel.selectedOptions[0];
     if (opt && opt.dataset.body !== undefined) {
       editor.setValue(opt.dataset.body);
-      $("options").value = opt.dataset.options;
+      $("options").value = opt.dataset.options ?? $("options").defaultValue;
     }
   });
 }
@@ -160,7 +160,11 @@ $("help-link").addEventListener("click", () => showTab("help"));
 // fields that differ from the page's defaults as URL parameters, plus the format
 // version `v`. Decoding sets every field, falling back to its default when the
 // link omits it or holds a value the control can't take.
-const SHARE_VERSION = "1";
+const SHARE_VERSION = "2";
+// Older versions still decode, with the defaults they were encoded against.
+const SHARE_OLD_DEFAULTS = {
+  "1": { options: "" }, // before --omit-field-prefixes became the default
+};
 // Browsers take megabytes; some chat and mail clients truncate far earlier.
 const SHARE_WARN_LENGTH = 8000;
 
@@ -220,10 +224,13 @@ function encodeShare() {
 
 function applyShare(fragment) {
   const params = new URLSearchParams(fragment);
-  if (params.get("v") !== SHARE_VERSION) return;
+  const v = params.get("v");
+  if (v !== SHARE_VERSION && !Object.hasOwn(SHARE_OLD_DEFAULTS, v)) return;
+  const oldDefaults = SHARE_OLD_DEFAULTS[v] ?? {};
   for (const [key, field] of Object.entries(shareFields)) {
     const value = params.get(key);
-    field.set(value !== null && field.valid(value) ? value : field.initial);
+    const initial = Object.hasOwn(oldDefaults, key) ? oldDefaults[key] : field.initial;
+    field.set(value !== null && field.valid(value) ? value : initial);
   }
 }
 

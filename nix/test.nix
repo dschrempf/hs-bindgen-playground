@@ -16,7 +16,7 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
-    import base64, json
+    import base64, html.parser, json
 
     def post(payload):
         b64 = base64.b64encode(json.dumps(payload).encode()).decode()
@@ -43,13 +43,25 @@ pkgs.testers.nixosTest {
     for v in versions.values():
         assert f"{v['name']} {v['version']}" in journal, f"{v['name']} not in the journal"
 
-    # Every shipped example must generate bindings — the exact set the UI serves.
+    # Every shipped example must generate bindings — the exact set the UI serves,
+    # with the options it fills in: the example's own, else the field's default.
+    class OptionsDefault(html.parser.HTMLParser):
+        value: str | None = None
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "input" and attrs.get("id") == "options":
+                self.value = attrs.get("value", "")
+    page = OptionsDefault()
+    page.feed(machine.succeed("curl -sS http://localhost/"))
+    assert page.value is not None, "page has no options field"
     examples = json.loads(machine.succeed("curl -sS http://localhost/api/examples"))
     assert examples, "server served no examples"
     for ex in examples:
-        print(f"--- running example {ex['name']!r} ---")
-        out = post({"source": ex["body"], "module": "Example"})
-        assert json.loads(out).get("ok") is True, f"example {ex['name']!r} failed: {out}"
+        opts = page.value if ex["options"] is None else ex["options"]
+        print(f"--- running example {ex['name']!r} with options {opts!r} ---")
+        res = json.loads(post({"source": ex["body"], "module": "Example", "options": opts}))
+        assert res.get("ok") is True, f"example {ex['name']!r} failed: {res}"
+        assert opts in res["command"], f"options {opts!r} not passed: {res['command']}"
     print(f"generated bindings for {len(examples)} examples")
 
     # A struct must generate a record with a Storable instance.

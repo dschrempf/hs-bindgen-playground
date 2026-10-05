@@ -116,8 +116,9 @@ data StoreBind
 data Example = Example
   { exName :: Text,
     exBody :: Text,
-    -- | Preselected additional options, from a sibling @.opts@ file; empty if absent.
-    exOptions :: Text
+    -- | Preselected additional options, from a sibling @.opts@ file; absent → the
+    -- page's default.
+    exOptions :: Maybe Text
   }
 
 -- | One accepted extra option, as the CLI's @preprocess --help@ describes it.
@@ -786,7 +787,7 @@ loadExamples dir = do
       contents <- TIO.readFile (dir </> n)
       let optsFile = dir </> replaceExtension n "opts"
       hasOpts <- doesFileExist optsFile
-      opts <- if hasOpts then T.strip <$> TIO.readFile optsFile else pure ""
+      opts <- if hasOpts then Just . T.strip <$> TIO.readFile optsFile else pure Nothing
       pure Example {exName = label (T.pack n), exBody = contents, exOptions = opts}
     label n =
       let base = fromMaybe n (T.stripSuffix ".h" n)
