@@ -361,7 +361,6 @@ allowedOpts =
     ("--select-except-by-header-path", 1),
     ("--select-by-decl-name", 1),
     ("--select-except-by-decl-name", 1),
-    ("--path-style", 1),
     ("--hash-define", 2)
   ]
 
