@@ -40,7 +40,7 @@ header h1 { margin: 0; font-size: 1.2rem; }
   gap: 0.25rem;
   text-decoration: none;
 }
-.event img { height: 1.4rem; }
+.event strong { color: var(--fg); font-size: 1rem; }
 .event span { color: var(--muted); font-size: 0.8rem; }
 .event:hover span { text-decoration: underline; }
 
