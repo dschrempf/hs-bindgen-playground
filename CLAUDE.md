@@ -90,8 +90,6 @@ nix flake check                           # eval everything + run the test
   non-default fields as URL parameters plus `v=1`, never sent to the server. Old links
   must keep decoding: a new field is fine (absent → default), a changed meaning needs a
   new `v`.
-- **hs-bindgen is pinned in `flake.lock`**, not by rev in the URL. Bump with
-  `nix flake update hs-bindgen`.
 - `checks.integration` (the nixosTest) is defined for both Linux systems; it's
   Linux-only because it VM-tests systemd + bwrap. `nix flake check` builds only the
   current system's check (warns it "omitted incompatible systems: aarch64-linux" on

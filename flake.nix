@@ -2,7 +2,7 @@
   description = "hs-bindgen-playground — paste a C header, get Haskell bindings";
 
   inputs = {
-    hs-bindgen.url = "github:well-typed/hs-bindgen";
+    hs-bindgen.url = "github:well-typed/hs-bindgen/release-1.0.0.0";
     # Same nixpkgs as hs-bindgen → no version skew, single eval.
     nixpkgs.follows = "hs-bindgen/nixpkgs";
     # Declarative disk layout for the nixos-anywhere Hetzner target.

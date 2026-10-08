@@ -53,6 +53,7 @@
       },
       "original": {
         "owner": "well-typed",
+        "ref": "release-1.0.0.0",
         "repo": "hs-bindgen",
         "type": "github"
       }
