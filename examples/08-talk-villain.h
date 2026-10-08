@@ -1,8 +1,7 @@
 #include <stddef.h>
 
-#define SQUARE(x) ((x) * (x))
-#define MASK (1u << 31)
-#define OOPS (1 << 31)
+#define MASK   (1u << 31)
+#define ADD(x) ((x) + 4)
 
 struct blinds {
   char window_id;
