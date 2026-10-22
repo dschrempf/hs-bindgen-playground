@@ -47,6 +47,7 @@ cabal run              # or: nix run .#   (server on http://localhost:3000)
 | `PLAYGROUND_VERBOSITY` | `2` | hs-bindgen-cli verbosity (0–4) |
 | `PLAYGROUND_READONLY` | `false` | Kill switch: disable generation |
 | `PLAYGROUND_READONLY_MESSAGE` | — | Banner text when read-only; unset or empty keeps the server's default |
+| `PLAYGROUND_STATS_FILE` | — | Append anonymous usage events here, one JSON object per line; unset records nothing |
 
 ## Test
 

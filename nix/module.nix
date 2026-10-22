@@ -7,6 +7,7 @@ let
   cfg = config.services.hs-bindgen-playground;
   # Reverse-proxy site address: a real domain (→ ACME/HTTPS) or plain :80.
   siteAddr = if cfg.domain != null then cfg.domain else ":80";
+  stateDirectory = "hs-bindgen-playground";
 in
 {
   options.services.hs-bindgen-playground = {
@@ -117,6 +118,23 @@ in
       description = "Banner text shown when `readOnly` is set; `null` keeps the server's default.";
     };
 
+    stats.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Append an anonymous record of each page view and generation request
+        to `stats.file`: time, outcome, input size, example name, C standard,
+        safety and option flags. No addresses, headers or option arguments.
+      '';
+    };
+
+    stats.file = lib.mkOption {
+      type = lib.types.str;
+      default = "/var/lib/${stateDirectory}/events.jsonl";
+      readOnly = true;
+      description = "Where `stats.enable` records events, one JSON object per line.";
+    };
+
     reverseProxy.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -162,11 +180,17 @@ in
       }
       // lib.optionalAttrs (cfg.readOnlyMessage != null) {
         PLAYGROUND_READONLY_MESSAGE = cfg.readOnlyMessage;
+      }
+      // lib.optionalAttrs cfg.stats.enable {
+        PLAYGROUND_STATS_FILE = cfg.stats.file;
       };
 
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;
         Restart = "on-failure";
+        # Kept across restarts and deploys; with DynamicUser it lives in
+        # /var/lib/private, behind a symlink at the usual path.
+        StateDirectory = lib.mkIf cfg.stats.enable stateDirectory;
 
         # Resource ceilings for the whole service — the host-level backstop that
         # holds even if the per-job prlimits inside the sandbox are evaded or

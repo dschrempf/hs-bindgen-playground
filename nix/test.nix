@@ -15,7 +15,7 @@ pkgs.testers.nixosTest {
     virtualisation.diskSize = 8192;
   };
 
-  testScript = ''
+  testScript = { nodes, ... }: ''
     import base64, html.parser, json
 
     def post(payload):
@@ -119,5 +119,21 @@ pkgs.testers.nixosTest {
     assert any(e["usage"] == "--hash-define NAME VALUE" for e in help), f"unexpected help: {help}"
     journal = machine.succeed("journalctl -u hs-bindgen-playground.service --no-pager")
     assert "warning: allowlisted" not in journal, "allowlist out of sync with `preprocess --help`"
+
+    # Every request above is recorded, and nothing a visitor typed is.
+    print("--- running check: usage statistics ---")
+    stats_file = "${nodes.machine.services.hs-bindgen-playground.stats.file}"
+    raw = machine.succeed(f"cat {stats_file}")
+    events = [json.loads(l) for l in raw.splitlines()]
+    kinds = [e["event"] for e in events]
+    assert kinds.count("started") == 1, f"unexpected starts: {kinds}"
+    assert kinds.count("pageView") == 1, f"unexpected page views: {kinds}"
+    generated = [e for e in events if e["event"] == "generate"]
+    assert len(generated) == len(examples) + 6, f"unexpected generate events: {generated}"
+    assert [e["example"] for e in generated[:len(examples)]] == [ex["name"] for ex in examples]
+    assert generated[len(examples)]["example"] is None, "custom header counted as an example"
+    assert generated[-1]["result"] == "invalid", f"rejected options not recorded: {generated[-1]}"
+    for secret in ["Point", "passwd", "clang-option", system]:
+        assert secret not in raw, f"{secret!r} from a request leaked into the statistics"
   '';
 }

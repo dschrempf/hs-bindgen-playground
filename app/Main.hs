@@ -5,12 +5,14 @@
 -- @hs-bindgen-cli@ inside a bubblewrap sandbox and returns generated bindings.
 module Main (main) where
 
+import Control.Concurrent.MVar (newMVar, withMVar)
 import Control.Concurrent.STM
-import Control.Exception (finally)
+import Control.Exception (IOException, finally, try)
 import Control.Monad (unless, when)
 import Data.Aeson
   ( FromJSON (..),
     Value,
+    encode,
     object,
     withObject,
     (.!=),
@@ -19,8 +21,9 @@ import Data.Aeson
     (.=),
   )
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BL
 import Data.Char (isAlphaNum, isSpace, isUpper)
-import Data.List (sort)
+import Data.List (find, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -28,6 +31,8 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Text.IO qualified as TIO
 import Data.Text.Lazy qualified as TL
+import Data.Time.Clock (UTCTime, getCurrentTime)
+import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Types (status403, status413, status503)
 import Network.Wai (Middleware, pathInfo)
 import Network.Wai.Middleware.RequestSizeLimit
@@ -70,7 +75,8 @@ data Config = Config
     cfgMemBytes :: Integer,
     cfgVerbosity :: Int,
     cfgGeneration :: Generation,
-    cfgComponents :: [Component]
+    cfgComponents :: [Component],
+    cfgStats :: StatsSink
   }
 
 -- | A versioned part of the running instance, shown in the UI header: this
@@ -181,7 +187,7 @@ data Outcome
 
 -- | Result of a successful (or failed-but-ran) generation.
 data GenResult = GenResult
-  { resOk :: Bool,
+  { resOutcome :: Outcome,
     resBindings :: Text,
     resCommand :: Text,
     resDiagnostics :: Text,
@@ -207,6 +213,8 @@ withGate (Gate tv) act = do
 main :: IO ()
 main = do
   cfg <- loadConfig
+  record <- openStats (cfgStats cfg)
+  record (Started (cfgComponents cfg))
   gate <- newGate (cfgMaxConcurrent cfg)
   examples <- loadExamples (cfgExamplesDir cfg)
   help <- loadHelp (cfgCli cfg)
@@ -232,6 +240,7 @@ main = do
       json $ errObj ("Request too large (limit " <> tshow maxLen <> " bytes).")
 
     get "/" $ do
+      liftIO (record PageView)
       setHeader "Cache-Control" (cacheControl Revalidate)
       html index
 
@@ -258,7 +267,7 @@ main = do
         | e <- help
         ]
 
-    post "/api/generate" $ handleGenerate cfg gate
+    post "/api/generate" $ handleGenerate cfg examples gate record
 
 -- | Reject an over-large request body while it streams in, before any handler
 -- buffers it — a coarse DoS backstop below the per-field 'cfgMaxInputBytes'
@@ -275,16 +284,25 @@ bodyLimit cfg =
     limit = fromIntegral (cfgMaxInputBytes cfg) * 8 + 65536
 
 -- | The @POST \/api\/generate@ handler: validate, gate, run, respond.
-handleGenerate :: Config -> Gate -> ActionM ()
-handleGenerate cfg gate = case cfgGeneration cfg of
+handleGenerate :: Config -> [Example] -> Gate -> (Event -> IO ()) -> ActionM ()
+handleGenerate cfg examples gate record = case cfgGeneration cfg of
   Disabled msg -> do
+    liftIO (record (Generate RefusedReadOnly))
     status status503
     json $ errObj msg
   Enabled -> do
     req <- jsonData
     let srcBytes = BS.length (TE.encodeUtf8 (reqSource req))
+        submitted fate =
+          liftIO . record . Generate . Submitted $
+            Submission
+              { subSource = sourceOf examples (reqSource req),
+                subInputBytes = srcBytes,
+                subFate = fate
+              }
     if srcBytes > cfgMaxInputBytes cfg
       then do
+        submitted TooLarge
         status status413
         json . errObj $
           "Input too large ("
@@ -294,15 +312,26 @@ handleGenerate cfg gate = case cfgGeneration cfg of
             <> ")."
       else case validate cfg req of
         Left msg -> do
+          submitted Invalid
           status status403
           json (errObj msg)
         Right job -> do
+          start <- liftIO getMonotonicTime
           mres <- liftIO $ withGate gate (runGenerate cfg job)
+          end <- liftIO getMonotonicTime
           case mres of
             Nothing -> do
+              submitted (Busy job)
               status status503
               json (errObj "Server busy — please try again in a moment.")
-            Just res -> json (resultObj res)
+            Just res -> do
+              submitted . Ran $
+                Run
+                  { runJob = job,
+                    runOutcome = resOutcome res,
+                    runMillis = round ((end - start) * 1000)
+                  }
+              json (resultObj res)
 
 -- | Turn a wire 'GenReq' into a 'Job', rejecting anything the CLI shouldn't see.
 validate :: Config -> GenReq -> Either Text Job
@@ -401,7 +430,7 @@ runGenerate cfg job =
         code = case ec of ExitSuccess -> 0; ExitFailure n -> n
     pure
       GenResult
-        { resOk = case outcome of Generated -> True; _ -> False,
+        { resOutcome = outcome,
           resBindings = truncateText maxBindings bindings,
           resCommand = displayCommand job,
           resDiagnostics = trimLines (annotate outcome out),
@@ -684,12 +713,119 @@ componentObj c =
 resultObj :: GenResult -> Value
 resultObj r =
   object
-    [ "ok" .= resOk r,
+    [ "ok" .= case resOutcome r of Generated -> True; _ -> False,
       "bindings" .= resBindings r,
       "command" .= resCommand r,
       "diagnostics" .= resDiagnostics r,
       "exitCode" .= resExitCode r
     ]
+
+-- Usage statistics ----------------------------------------------------------
+
+-- | Where usage events go: @PLAYGROUND_STATS_FILE@, one JSON object per line.
+data StatsSink
+  = -- | Unset: record nothing, as under @cabal run@.
+    NoStats
+  | StatsFile FilePath
+
+-- | One line of the usage log. Nothing in it identifies a visitor: no address,
+-- no header contents, no option arguments, no free-form request field.
+data Event
+  = -- | The server came up; its versions hold until the next 'Started'.
+    Started [Component]
+  | PageView
+  | Generate GenerateEvent
+
+-- | What became of one @POST \/api\/generate@.
+data GenerateEvent
+  = -- | 'Disabled': refused before the body is read.
+    RefusedReadOnly
+  | Submitted Submission
+
+data Submission = Submission
+  { subSource :: Source,
+    subInputBytes :: Int,
+    subFate :: Fate
+  }
+
+data Source
+  = -- | An example, verbatim; the text is its 'exName'.
+    FromExample Text
+  | -- | Anything else, an edited example included.
+    Custom
+
+data Fate
+  = -- | Over 'cfgMaxInputBytes'.
+    TooLarge
+  | -- | 'validate' refused it; its options are unchecked, so none are recorded.
+    Invalid
+  | -- | No slot free at the 'Gate'.
+    Busy Job
+  | Ran Run
+
+data Run = Run
+  { runJob :: Job,
+    runOutcome :: Outcome,
+    -- | Wall clock, including the sandbox setup.
+    runMillis :: Int
+  }
+
+sourceOf :: [Example] -> Text -> Source
+sourceOf examples src =
+  maybe Custom (FromExample . exName) (find ((== src) . exBody) examples)
+
+-- | The returned action appends one event, stamped with the current time.
+-- Writes are serialized, so concurrent requests don't interleave lines. A
+-- failed write warns instead of failing the request.
+openStats :: StatsSink -> IO (Event -> IO ())
+openStats = \case
+  NoStats -> pure (\_ -> pure ())
+  StatsFile path -> do
+    lock <- newMVar =<< openFile path AppendMode
+    pure $ \ev -> do
+      t <- getCurrentTime
+      r <- try . withMVar lock $ \h -> do
+        BL.hPut h (encode (eventObj t ev) <> "\n")
+        hFlush h
+      case r of
+        Left (e :: IOException) -> warn ("cannot record a usage event: " <> tshow e)
+        Right () -> pure ()
+
+eventObj :: UTCTime -> Event -> Value
+eventObj t ev = object (("time" .= t) : fields ev)
+  where
+    fields = \case
+      Started cs -> [kind "started", "versions" .= map componentObj cs]
+      PageView -> [kind "pageView"]
+      Generate RefusedReadOnly -> [kind "generate", result "readOnly"]
+      Generate (Submitted s) ->
+        [ kind "generate",
+          "example" .= case subSource s of
+            FromExample n -> Just n
+            Custom -> Nothing,
+          "inputBytes" .= subInputBytes s
+        ]
+          ++ case subFate s of
+            TooLarge -> [result "tooLarge"]
+            Invalid -> [result "invalid"]
+            Busy job -> result "busy" : jobFields job
+            Ran r ->
+              result (outcomeName (runOutcome r))
+                : ("durationMs" .= runMillis r)
+                : jobFields (runJob r)
+    kind k = "event" .= (k :: Text)
+    result k = "result" .= (k :: Text)
+    -- Only what 'validate' checked against a fixed list.
+    jobFields job =
+      [ "std" .= jobStd job,
+        "safe" .= jobSafe job,
+        "options" .= map optFlag (jobExtraOpts job)
+      ]
+    outcomeName :: Outcome -> Text
+    outcomeName = \case
+      Generated -> "generated"
+      TimedOut -> "timedOut"
+      Failed -> "failed"
 
 -- Config / examples ---------------------------------------------------------
 
@@ -710,6 +846,7 @@ loadConfig = do
     <*> envInt "PLAYGROUND_VERBOSITY" 2
     <*> loadGeneration
     <*> loadComponents
+    <*> (maybe NoStats StatsFile <$> lookupEnv "PLAYGROUND_STATS_FILE")
 
 -- | An empty message counts as unset: the UI shows the banner only for a
 -- non-empty one.
@@ -816,7 +953,6 @@ loadHelp cli = do
         | helpArity e /= n ->
             warn $ "allowlisted " <> flag <> " takes " <> tshow n <> " argument(s), help says: " <> helpUsage e
         | otherwise -> pure ()
-    warn msg = TIO.hPutStrLn stderr ("warning: " <> msg)
 
 -- | Names of the option, e.g. @[\"-v\", \"--verbosity\"]@ for @-v,--verbosity INT@.
 helpFlags :: HelpEntry -> [Text]
@@ -882,6 +1018,9 @@ trimLines t = T.intercalate "\n" (map trim shown <> note)
     trim l
       | T.length l <= maxLineLen = l
       | otherwise = T.take maxLineLen l <> " … (truncated) "
+
+warn :: Text -> IO ()
+warn msg = TIO.hPutStrLn stderr ("warning: " <> msg)
 
 tshow :: (Show a) => a -> Text
 tshow = T.pack . show

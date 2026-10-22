@@ -90,6 +90,12 @@ nix flake check                           # eval everything + run the test
   non-default fields as URL parameters plus `v=1`, never sent to the server. Old links
   must keep decoding: a new field is fine (absent → default), a changed meaning needs a
   new `v`.
+- **Usage statistics are anonymous by construction** (`Event`/`eventObj` in `Main.hs`): one
+  JSON line per start, page view and generate request in `PLAYGROUND_STATS_FILE` (the
+  module's read-only `stats.file`, under its `StateDirectory`). Never record an address,
+  the source, an option argument or any other free-form request field; the nixosTest
+  checks the file holds none of its requests' text. The source is reduced to the name of
+  the example it equals verbatim, else `null`. Versions are on the `started` event only.
 - `checks.integration` (the nixosTest) is defined for both Linux systems; it's
   Linux-only because it VM-tests systemd + bwrap. `nix flake check` builds only the
   current system's check (warns it "omitted incompatible systems: aarch64-linux" on
