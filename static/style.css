@@ -33,21 +33,16 @@ header h1 { margin: 0; font-size: 1.2rem; }
 .tagline { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
 .tagline a { color: var(--accent); }
 
-.event {
+/* Empty for now; holds the middle column so the versions stay on the right. */
+.logo {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  color: #8f4c8a; /* the logo's purple */
-  text-decoration: none;
+  justify-content: center;
 }
-.event strong { font-size: 1.1rem; }
-.event span { font-size: 0.8rem; }
-.event:hover span { text-decoration: underline; }
 
 @media (max-width: 50rem) {
   header { grid-template-columns: 1fr; }
-  .event { align-items: flex-start; }
+  .logo { justify-content: flex-start; }
+  .logo:empty { display: none; }
   .versions { text-align: left; }
 }
 

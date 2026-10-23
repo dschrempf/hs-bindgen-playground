@@ -1,6 +1,6 @@
 # hs-bindgen-playground
 
-Public web service for a MuniHac talk: paste a C header → get Haskell bindings.
+Public web service: paste a C header → get Haskell bindings.
 A scotty server shells out to the Nix-built `hs-bindgen-cli` (pinned flake input)
 inside a bubblewrap sandbox. Deployed with Nix.
 

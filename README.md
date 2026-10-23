@@ -5,9 +5,9 @@ get back the Haskell module produced by
 [hs-bindgen](https://github.com/well-typed/hs-bindgen) — plus the exact CLI
 command that ran and hs-bindgen's diagnostics.
 
-Built for a MuniHac talk. It shells out to the Nix-built `hs-bindgen-cli`
-(pinned as a flake input) inside a [bubblewrap](https://github.com/containers/bubblewrap)
-sandbox, so it is safe to expose publicly.
+It shells out to the Nix-built `hs-bindgen-cli` (pinned as a flake input) inside
+a [bubblewrap](https://github.com/containers/bubblewrap) sandbox, so it is safe
+to expose publicly.
 
 ## How it works
 
