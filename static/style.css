@@ -29,7 +29,7 @@ header {
   align-items: start;
   gap: 0.5rem 1.5rem;
 }
-header h1 { margin: 0; font-size: 1.2rem; }
+header h1 { margin: 0; font-size: 1.2rem; color: #fff; /* the logo's text */ }
 .tagline { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
 .tagline a { color: var(--accent); }
 
