@@ -33,16 +33,15 @@ header h1 { margin: 0; font-size: 1.2rem; }
 .tagline { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
 .tagline a { color: var(--accent); }
 
-/* Empty for now; holds the middle column so the versions stay on the right. */
 .logo {
   display: flex;
-  justify-content: center;
+  justify-self: center;
 }
+.logo img { height: 2.4rem; }
 
 @media (max-width: 50rem) {
   header { grid-template-columns: 1fr; }
-  .logo { justify-content: flex-start; }
-  .logo:empty { display: none; }
+  .logo { justify-self: start; }
   .versions { text-align: left; }
 }
 
