@@ -135,6 +135,31 @@ in
       description = "Where `stats.enable` records events, one JSON object per line.";
     };
 
+    plausible.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Also send each page view and generation request to Plausible: the
+        fields `stats.enable` records except input size and duration, plus the
+        visitor's address, user agent and referrer, which Plausible hashes into
+        a daily visitor ID. Events without a user agent are not sent.
+      '';
+    };
+
+    plausible.domain = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = cfg.domain;
+      defaultText = lib.literalExpression "config.services.hs-bindgen-playground.domain";
+      description = "The site as registered in Plausible.";
+    };
+
+    plausible.endpoint = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://plausible.example.com/api/event";
+      description = "Events API URL; `null` keeps the server's default, Plausible's hosted one.";
+    };
+
     reverseProxy.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -162,6 +187,10 @@ in
         assertion = cfg.reverseProxy.enable || cfg.domain == null;
         message = "services.hs-bindgen-playground: domain is set but reverseProxy.enable is false, so nothing would serve it.";
       }
+      {
+        assertion = !cfg.plausible.enable || cfg.plausible.domain != null;
+        message = "services.hs-bindgen-playground: plausible.enable needs plausible.domain (or domain).";
+      }
     ];
 
     systemd.services.hs-bindgen-playground = {
@@ -183,6 +212,12 @@ in
       }
       // lib.optionalAttrs cfg.stats.enable {
         PLAYGROUND_STATS_FILE = cfg.stats.file;
+      }
+      // lib.optionalAttrs cfg.plausible.enable {
+        PLAYGROUND_PLAUSIBLE_DOMAIN = cfg.plausible.domain;
+      }
+      // lib.optionalAttrs (cfg.plausible.enable && cfg.plausible.endpoint != null) {
+        PLAYGROUND_PLAUSIBLE_ENDPOINT = cfg.plausible.endpoint;
       };
 
       serviceConfig = {

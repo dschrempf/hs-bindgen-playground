@@ -96,6 +96,13 @@ nix flake check                           # eval everything + run the test
   the source, an option argument or any other free-form request field; the nixosTest
   checks the file holds none of its requests' text. The source is reduced to the name of
   the example it equals verbatim, else `null`. Versions are on the `started` event only.
+- **Plausible gets the visitor, the file never does** (`Visitor`/`openPlausible` in
+  `Main.hs`): with `PLAYGROUND_PLAUSIBLE_DOMAIN` set, each `Visit` also goes to Plausible's
+  Events API, with the forwarded address, user agent and referrer. Its props are derived
+  from the file's fields (`plausibleProps`), so the anonymity rule above covers them too.
+  The address is `X-Forwarded-For` verbatim, trusted because caddy replaces a client's;
+  without it Plausible sees the server's own, usually a data-center address, and drops the event
+  (202 with `x-plausible-dropped: 1`). Sending is queued, never on the request path.
 - `checks.integration` (the nixosTest) is defined for both Linux systems; it's
   Linux-only because it VM-tests systemd + bwrap. `nix flake check` builds only the
   current system's check (warns it "omitted incompatible systems: aarch64-linux" on

@@ -72,6 +72,9 @@
                 p.wai-extra
                 p.http-types
                 p.temporary
+                p.http-client
+                p.http-client-tls
+                p.network
               ]))
               hsPkgs.cabal-install
               hsPkgs.haskell-language-server

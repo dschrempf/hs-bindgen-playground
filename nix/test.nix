@@ -2,6 +2,32 @@
 # and assert real Haskell bindings come back (exercises the bwrap sandbox too).
 { pkgs, module }:
 
+let
+  # Stands in for Plausible's Events API: appends each event, with the headers
+  # the server forwards, to `plausibleLog`.
+  plausiblePort = 8125;
+  plausibleLog = "/tmp/plausible.jsonl";
+  plausibleMock = pkgs.writeText "plausible-mock.py" ''
+    import http.server, json
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            event = {
+                "path": self.path,
+                "userAgent": self.headers.get("User-Agent"),
+                "forwardedFor": self.headers.get("X-Forwarded-For"),
+                "body": json.loads(body),
+            }
+            with open("${plausibleLog}", "a") as f:
+                f.write(json.dumps(event) + "\n")
+            self.send_response(202)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    http.server.HTTPServer(("127.0.0.1", ${toString plausiblePort}), Handler).serve_forever()
+  '';
+in
 pkgs.testers.nixosTest {
   name = "hs-bindgen-playground";
 
@@ -10,6 +36,15 @@ pkgs.testers.nixosTest {
     services.hs-bindgen-playground = {
       enable = true;
       # domain = null → caddy serves plain HTTP on :80.
+      plausible = {
+        enable = true;
+        domain = "playground.test";
+        endpoint = "http://127.0.0.1:${toString plausiblePort}/api/event";
+      };
+    };
+    systemd.services.plausible-mock = {
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig.ExecStart = "${pkgs.python3.interpreter} ${plausibleMock}";
     };
     virtualisation.memorySize = 4096;
     virtualisation.diskSize = 8192;
@@ -29,6 +64,7 @@ pkgs.testers.nixosTest {
     machine.wait_for_unit("hs-bindgen-playground.service")
     machine.wait_for_unit("caddy.service")
     machine.wait_for_open_port(80)
+    machine.wait_for_open_port(${toString plausiblePort})
 
     # The header's version line comes from /api/config; the same strings are
     # logged at startup. "dev" means the wrapper failed to set them.
@@ -133,7 +169,37 @@ pkgs.testers.nixosTest {
     assert [e["example"] for e in generated[:len(examples)]] == [ex["name"] for ex in examples]
     assert generated[len(examples)]["example"] is None, "custom header counted as an example"
     assert generated[-1]["result"] == "invalid", f"rejected options not recorded: {generated[-1]}"
-    for secret in ["Point", "passwd", "clang-option", system]:
+    secrets = ["Point", "passwd", "clang-option", system]
+    for secret in secrets:
         assert secret not in raw, f"{secret!r} from a request leaked into the statistics"
+
+    # Plausible gets every request above plus this page view, in order, with
+    # the address caddy saw rather than the one the client claims.
+    print("--- running check: Plausible events ---")
+    machine.succeed(
+        "curl -sS -o /dev/null -A 'Mozilla/5.0 (test)' -e https://example.org/ "
+        + "-H 'X-Forwarded-For: 203.0.113.7' http://localhost/"
+    )
+    expected = len(events) - kinds.count("started") + 1
+    machine.wait_until_succeeds(f"test $(wc -l < ${plausibleLog}) -eq {expected}")
+    sent_raw = machine.succeed("cat ${plausibleLog}")
+    sent = [json.loads(l) for l in sent_raw.splitlines()]
+    print(sent[-1])
+    names = [s["body"]["name"] for s in sent]
+    assert names == ["pageview"] + ["Generate"] * len(generated) + ["pageview"], f"unexpected events: {names}"
+    assert all(s["path"] == "/api/event" for s in sent), "wrong endpoint path"
+    assert all(s["body"]["domain"] == "playground.test" for s in sent), "wrong site domain"
+    addresses = {s["forwardedFor"] for s in sent}
+    assert addresses <= {"127.0.0.1", "::1"}, f"unexpected visitor addresses: {addresses}"
+    assert sent[-1]["userAgent"] == "Mozilla/5.0 (test)", f"user agent not forwarded: {sent[-1]}"
+    assert sent[-1]["body"]["referrer"] == "https://example.org/", f"referrer not forwarded: {sent[-1]}"
+    props = [s["body"]["props"] for s in sent if s["body"]["name"] == "Generate"]
+    assert [p.get("example") for p in props[:len(examples)]] == [ex["name"] for ex in examples]
+    assert props[-1] == {"result": "invalid"}, f"unexpected props: {props[-1]}"
+    assert all("inputBytes" not in p and "durationMs" not in p for p in props), "numbers sent"
+    for secret in secrets:
+        assert secret not in sent_raw, f"{secret!r} from a request leaked to Plausible"
+    journal = machine.succeed("journalctl -u hs-bindgen-playground.service --no-pager")
+    assert "Plausible" not in journal, "a usage event failed to reach Plausible"
   '';
 }

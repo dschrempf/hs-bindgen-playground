@@ -18,7 +18,10 @@ executable hs-bindgen-playground
         , bytestring
         , directory
         , filepath
+        , http-client
+        , http-client-tls
         , http-types
+        , network
         , process
         , scotty
         , stm

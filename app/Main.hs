@@ -5,13 +5,14 @@
 -- @hs-bindgen-cli@ inside a bubblewrap sandbox and returns generated bindings.
 module Main (main) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Exception (IOException, finally, try)
-import Control.Monad (unless, when)
+import Control.Monad (forever, unless, when)
 import Data.Aeson
   ( FromJSON (..),
-    Value,
+    Value (..),
     encode,
     object,
     withObject,
@@ -20,9 +21,11 @@ import Data.Aeson
     (.:?),
     (.=),
   )
+import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isAlphaNum, isSpace, isUpper)
+import Data.Foldable (toList)
 import Data.List (find, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -33,14 +36,25 @@ import Data.Text.IO qualified as TIO
 import Data.Text.Lazy qualified as TL
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
-import Network.HTTP.Types (status403, status413, status503)
-import Network.Wai (Middleware, pathInfo)
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Client.TLS (newTlsManager)
+import Network.HTTP.Types
+  ( hContentType,
+    hUserAgent,
+    status403,
+    status413,
+    status503,
+    statusIsSuccessful,
+  )
+import Network.Socket (NameInfoFlag (..), SockAddr, getNameInfo)
+import Network.Wai (Middleware, pathInfo, remoteHost)
 import Network.Wai.Middleware.RequestSizeLimit
   ( defaultRequestSizeLimitSettings,
     requestSizeLimitMiddleware,
     setMaxLengthForRequest,
   )
 import Network.Wai.Request (RequestSizeException (..))
+import Numeric.Natural (Natural)
 import System.Directory
   ( createDirectoryIfMissing,
     doesFileExist,
@@ -76,7 +90,8 @@ data Config = Config
     cfgVerbosity :: Int,
     cfgGeneration :: Generation,
     cfgComponents :: [Component],
-    cfgStats :: StatsSink
+    cfgStats :: StatsSink,
+    cfgPlausible :: PlausibleSink
   }
 
 -- | A versioned part of the running instance, shown in the UI header: this
@@ -213,7 +228,9 @@ withGate (Gate tv) act = do
 main :: IO ()
 main = do
   cfg <- loadConfig
-  record <- openStats (cfgStats cfg)
+  recordFile <- openStats (cfgStats cfg)
+  recordPlausible <- openPlausible (cfgPlausible cfg)
+  let record ev = recordFile ev >> recordPlausible ev
   record (Started (cfgComponents cfg))
   gate <- newGate (cfgMaxConcurrent cfg)
   examples <- loadExamples (cfgExamplesDir cfg)
@@ -240,7 +257,8 @@ main = do
       json $ errObj ("Request too large (limit " <> tshow maxLen <> " bytes).")
 
     get "/" $ do
-      liftIO (record PageView)
+      v <- visitorOf
+      liftIO (record (Visit v PageView))
       setHeader "Cache-Control" (cacheControl Revalidate)
       html index
 
@@ -285,53 +303,56 @@ bodyLimit cfg =
 
 -- | The @POST \/api\/generate@ handler: validate, gate, run, respond.
 handleGenerate :: Config -> [Example] -> Gate -> (Event -> IO ()) -> ActionM ()
-handleGenerate cfg examples gate record = case cfgGeneration cfg of
-  Disabled msg -> do
-    liftIO (record (Generate RefusedReadOnly))
-    status status503
-    json $ errObj msg
-  Enabled -> do
-    req <- jsonData
-    let srcBytes = BS.length (TE.encodeUtf8 (reqSource req))
-        submitted fate =
-          liftIO . record . Generate . Submitted $
-            Submission
-              { subSource = sourceOf examples (reqSource req),
-                subInputBytes = srcBytes,
-                subFate = fate
-              }
-    if srcBytes > cfgMaxInputBytes cfg
-      then do
-        submitted TooLarge
-        status status413
-        json . errObj $
-          "Input too large ("
-            <> tshow srcBytes
-            <> " bytes; limit "
-            <> tshow (cfgMaxInputBytes cfg)
-            <> ")."
-      else case validate cfg req of
-        Left msg -> do
-          submitted Invalid
-          status status403
-          json (errObj msg)
-        Right job -> do
-          start <- liftIO getMonotonicTime
-          mres <- liftIO $ withGate gate (runGenerate cfg job)
-          end <- liftIO getMonotonicTime
-          case mres of
-            Nothing -> do
-              submitted (Busy job)
-              status status503
-              json (errObj "Server busy — please try again in a moment.")
-            Just res -> do
-              submitted . Ran $
-                Run
-                  { runJob = job,
-                    runOutcome = resOutcome res,
-                    runMillis = round ((end - start) * 1000)
-                  }
-              json (resultObj res)
+handleGenerate cfg examples gate record = do
+  v <- visitorOf
+  let recordGenerate = liftIO . record . Visit v . Generate
+  case cfgGeneration cfg of
+    Disabled msg -> do
+      recordGenerate RefusedReadOnly
+      status status503
+      json $ errObj msg
+    Enabled -> do
+      req <- jsonData
+      let srcBytes = BS.length (TE.encodeUtf8 (reqSource req))
+          submitted fate =
+            recordGenerate . Submitted $
+              Submission
+                { subSource = sourceOf examples (reqSource req),
+                  subInputBytes = srcBytes,
+                  subFate = fate
+                }
+      if srcBytes > cfgMaxInputBytes cfg
+        then do
+          submitted TooLarge
+          status status413
+          json . errObj $
+            "Input too large ("
+              <> tshow srcBytes
+              <> " bytes; limit "
+              <> tshow (cfgMaxInputBytes cfg)
+              <> ")."
+        else case validate cfg req of
+          Left msg -> do
+            submitted Invalid
+            status status403
+            json (errObj msg)
+          Right job -> do
+            start <- liftIO getMonotonicTime
+            mres <- liftIO $ withGate gate (runGenerate cfg job)
+            end <- liftIO getMonotonicTime
+            case mres of
+              Nothing -> do
+                submitted (Busy job)
+                status status503
+                json (errObj "Server busy — please try again in a moment.")
+              Just res -> do
+                submitted . Ran $
+                  Run
+                    { runJob = job,
+                      runOutcome = resOutcome res,
+                      runMillis = round ((end - start) * 1000)
+                    }
+                json (resultObj res)
 
 -- | Turn a wire 'GenReq' into a 'Job', rejecting anything the CLI shouldn't see.
 validate :: Config -> GenReq -> Either Text Job
@@ -728,12 +749,41 @@ data StatsSink
     NoStats
   | StatsFile FilePath
 
--- | One line of the usage log. Nothing in it identifies a visitor: no address,
--- no header contents, no option arguments, no free-form request field.
+-- | Where usage events go besides the file: Plausible's Events API.
+data PlausibleSink
+  = -- | @PLAYGROUND_PLAUSIBLE_DOMAIN@ unset.
+    NoPlausible
+  | PlausibleSite Plausible
+
+data Plausible = Plausible
+  { -- | The site as registered in Plausible; also the host of the page URL each
+    -- event reports.
+    plDomain :: Text,
+    -- | @PLAYGROUND_PLAUSIBLE_ENDPOINT@, else 'plausibleEndpoint'.
+    plEndpoint :: HTTP.Request
+  }
+
+-- | One usage event.
 data Event
-  = -- | The server came up; its versions hold until the next 'Started'.
+  = -- | The server came up; its versions hold until the next 'Started'. Not sent
+    -- to Plausible, which counts visitors only.
     Started [Component]
-  | PageView
+  | Visit Visitor Activity
+
+-- | Who made a request; only Plausible sees it, which hashes address and user
+-- agent into a daily visitor ID.
+data Visitor = Visitor
+  { -- | @X-Forwarded-For@ as the reverse proxy sets it, else the peer.
+    visAddress :: Text,
+    -- | Plausible rejects an event without one, so none is sent.
+    visUserAgent :: Maybe Text,
+    visReferrer :: Maybe Text
+  }
+
+-- | What a request did. Nothing in it identifies a visitor: no address, no
+-- header contents, no option arguments, no free-form request field.
+data Activity
+  = PageView
   | Generate GenerateEvent
 
 -- | What became of one @POST \/api\/generate@.
@@ -792,27 +842,33 @@ openStats = \case
         Right () -> pure ()
 
 eventObj :: UTCTime -> Event -> Value
-eventObj t ev = object (("time" .= t) : fields ev)
+eventObj t ev = object (("time" .= t) : fields)
   where
-    fields = \case
-      Started cs -> [kind "started", "versions" .= map componentObj cs]
-      PageView -> [kind "pageView"]
-      Generate RefusedReadOnly -> [kind "generate", result "readOnly"]
-      Generate (Submitted s) ->
-        [ kind "generate",
-          "example" .= case subSource s of
-            FromExample n -> Just n
-            Custom -> Nothing,
-          "inputBytes" .= subInputBytes s
-        ]
-          ++ case subFate s of
-            TooLarge -> [result "tooLarge"]
-            Invalid -> [result "invalid"]
-            Busy job -> result "busy" : jobFields job
-            Ran r ->
-              result (outcomeName (runOutcome r))
-                : ("durationMs" .= runMillis r)
-                : jobFields (runJob r)
+    fields = case ev of
+      Started cs -> ["event" .= ("started" :: Text), "versions" .= map componentObj cs]
+      Visit _ a -> activityFields a
+
+-- | The file's fields for an 'Activity', its kind as @event@.
+activityFields :: Activity -> [Pair]
+activityFields = \case
+  PageView -> [kind "pageView"]
+  Generate RefusedReadOnly -> [kind "generate", result "readOnly"]
+  Generate (Submitted s) ->
+    [ kind "generate",
+      "example" .= case subSource s of
+        FromExample n -> Just n
+        Custom -> Nothing,
+      "inputBytes" .= subInputBytes s
+    ]
+      ++ case subFate s of
+        TooLarge -> [result "tooLarge"]
+        Invalid -> [result "invalid"]
+        Busy job -> result "busy" : jobFields job
+        Ran r ->
+          result (outcomeName (runOutcome r))
+            : ("durationMs" .= runMillis r)
+            : jobFields (runJob r)
+  where
     kind k = "event" .= (k :: Text)
     result k = "result" .= (k :: Text)
     -- Only what 'validate' checked against a fixed list.
@@ -826,6 +882,107 @@ eventObj t ev = object (("time" .= t) : fields ev)
       Generated -> "generated"
       TimedOut -> "timedOut"
       Failed -> "failed"
+
+-- | The returned action queues a 'Visit' for one worker thread to send, so no
+-- request waits on Plausible. A full queue or a failed send drops the event
+-- with a warning.
+openPlausible :: PlausibleSink -> IO (Event -> IO ())
+openPlausible = \case
+  NoPlausible -> pure (\_ -> pure ())
+  PlausibleSite site -> do
+    manager <- newTlsManager
+    queue <- newTBQueueIO plausibleQueueSize
+    _ <- forkIO . forever $ atomically (readTBQueue queue) >>= send manager
+    pure $ \case
+      Started _ -> pure ()
+      Visit v a -> case plausibleRequest site v a of
+        Nothing -> pure ()
+        Just req -> do
+          full <- atomically $ do
+            full <- isFullTBQueue queue
+            unless full (writeTBQueue queue req)
+            pure full
+          when full (warn "Plausible queue full, dropping a usage event")
+  where
+    send manager req = do
+      r <- try (HTTP.httpLbs req manager)
+      case r of
+        Left (e :: HTTP.HttpException) -> warn ("cannot send a usage event to Plausible: " <> tshow e)
+        Right res ->
+          unless (statusIsSuccessful (HTTP.responseStatus res)) $
+            warn $
+              "Plausible refused a usage event: "
+                <> tshow (HTTP.responseStatus res)
+                <> " "
+                <> truncateText 200 (TE.decodeUtf8With lenientDecode (BL.toStrict (HTTP.responseBody res)))
+
+plausibleQueueSize :: Natural
+plausibleQueueSize = 1000
+
+-- | 'Nothing' without a user agent.
+plausibleRequest :: Plausible -> Visitor -> Activity -> Maybe HTTP.Request
+plausibleRequest site v a = do
+  ua <- visUserAgent v
+  pure
+    (plEndpoint site)
+      { HTTP.method = "POST",
+        HTTP.requestHeaders =
+          [ (hUserAgent, TE.encodeUtf8 ua),
+            ("X-Forwarded-For", TE.encodeUtf8 (visAddress v)),
+            (hContentType, "application/json")
+          ],
+        HTTP.requestBody = HTTP.RequestBodyLBS (encode payload)
+      }
+  where
+    payload =
+      object
+        [ "name" .= name,
+          "url" .= ("https://" <> plDomain site <> "/"),
+          "domain" .= plDomain site,
+          "referrer" .= visReferrer v,
+          "props" .= object (plausibleProps (activityFields a))
+        ]
+    name :: Text
+    name = case a of
+      PageView -> "pageview"
+      Generate _ -> "Generate"
+
+-- | The file's fields as Plausible's string-valued custom properties, minus the
+-- kind (the event name instead) and the near-unique numbers, which would break
+-- down into one row per value.
+plausibleProps :: [Pair] -> [Pair]
+plausibleProps fields =
+  [ (k, String s)
+  | (k, val) <- fields,
+    k `notElem` ["event", "inputBytes", "durationMs"],
+    Just s <- [propText val]
+  ]
+  where
+    propText = \case
+      String s -> Just s
+      Bool b -> Just (if b then "true" else "false")
+      Number n -> Just (tshow n)
+      Array xs | not (null xs) -> Just (T.unwords [s | String s <- toList xs])
+      _ -> Nothing
+
+-- | The 'Visitor' behind the current request.
+visitorOf :: ActionM Visitor
+visitorOf = do
+  forwarded <- header "X-Forwarded-For"
+  address <- case forwarded of
+    Just f -> pure (TL.toStrict f)
+    Nothing -> liftIO . peerAddress . remoteHost =<< request
+  ua <- header "User-Agent"
+  referrer <- header "Referer"
+  pure
+    Visitor
+      { visAddress = address,
+        visUserAgent = TL.toStrict <$> ua,
+        visReferrer = TL.toStrict <$> referrer
+      }
+
+peerAddress :: SockAddr -> IO Text
+peerAddress addr = maybe (tshow addr) T.pack . fst <$> getNameInfo [NI_NUMERICHOST] True False addr
 
 -- Config / examples ---------------------------------------------------------
 
@@ -847,6 +1004,22 @@ loadConfig = do
     <*> loadGeneration
     <*> loadComponents
     <*> (maybe NoStats StatsFile <$> lookupEnv "PLAYGROUND_STATS_FILE")
+    <*> loadPlausible
+
+-- | A malformed endpoint fails at startup.
+loadPlausible :: IO PlausibleSink
+loadPlausible =
+  lookupEnv "PLAYGROUND_PLAUSIBLE_DOMAIN" >>= \case
+    Nothing -> pure NoPlausible
+    Just d -> do
+      endpoint <-
+        HTTP.parseRequest . fromMaybe plausibleEndpoint
+          =<< lookupEnv "PLAYGROUND_PLAUSIBLE_ENDPOINT"
+      pure (PlausibleSite Plausible {plDomain = T.pack d, plEndpoint = endpoint})
+
+-- | Plausible's hosted Events API.
+plausibleEndpoint :: String
+plausibleEndpoint = "https://plausible.io/api/event"
 
 -- | An empty message counts as unset: the UI shows the banner only for a
 -- non-empty one.

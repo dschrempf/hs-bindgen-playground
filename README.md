@@ -48,6 +48,8 @@ cabal run              # or: nix run .#   (server on http://localhost:3000)
 | `PLAYGROUND_READONLY` | `false` | Kill switch: disable generation |
 | `PLAYGROUND_READONLY_MESSAGE` | — | Banner text when read-only; unset or empty keeps the server's default |
 | `PLAYGROUND_STATS_FILE` | — | Append anonymous usage events here, one JSON object per line; unset records nothing |
+| `PLAYGROUND_PLAUSIBLE_DOMAIN` | — | Also send page views and generation requests to this Plausible site; unset sends nothing |
+| `PLAYGROUND_PLAUSIBLE_ENDPOINT` | `https://plausible.io/api/event` | Plausible Events API URL |
 
 ## Test
 
