@@ -69,6 +69,9 @@ nix flake check                           # eval everything + run the test
 - **Never give the CLI a closed stdout** (`NoStream` in `runCapture`): with fd 1 closed it
   hangs on its error path, so every failed generation stalls until the timeout kills it.
   `/dev/null` is fine; see the comment there.
+- **The sandbox sets `LANG=C.UTF-8`**: `--clearenv` leaves no locale, GHC then decodes
+  as ASCII, and the CLI dies reading `clang -E -C` output on a non-ASCII byte in a
+  header's comments.
 - **The version shown in the header comes from Nix, not from the code**: `flake.nix`
   computes `self.shortRev`/`dirtyShortRev` and the pinned hs-bindgen's rev, `package.nix`
   turns them into `versionEnv` (`PLAYGROUND_VERSION`, `PLAYGROUND_REVISION`,

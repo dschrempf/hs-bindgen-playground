@@ -112,6 +112,11 @@ pkgs.testers.nixosTest {
     assert "data Point" in out, "expected record for struct Point"
     assert "Storable" in out, "expected a Storable instance"
 
+    # The sandbox's locale must decode UTF-8 in a header's comments.
+    print("--- running check: non-ASCII comment ---")
+    res = json.loads(post({"source": "/* a \u2014 b */\nstruct Point { int x; };"}))
+    assert res.get("ok") is True, f"non-ASCII comment failed: {res}"
+
     # Bad C must fail cleanly, not crash the service.
     print("--- running check: bad C fails cleanly ---")
     bad = machine.succeed(
@@ -165,7 +170,7 @@ pkgs.testers.nixosTest {
     assert kinds.count("started") == 1, f"unexpected starts: {kinds}"
     assert kinds.count("pageView") == 1, f"unexpected page views: {kinds}"
     generated = [e for e in events if e["event"] == "generate"]
-    assert len(generated) == len(examples) + 6, f"unexpected generate events: {generated}"
+    assert len(generated) == len(examples) + 7, f"unexpected generate events: {generated}"
     assert [e["example"] for e in generated[:len(examples)]] == [ex["name"] for ex in examples]
     assert generated[len(examples)]["example"] is None, "custom header counted as an example"
     assert generated[-1]["result"] == "invalid", f"rejected options not recorded: {generated[-1]}"

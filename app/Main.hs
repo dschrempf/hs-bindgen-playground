@@ -511,7 +511,12 @@ buildArgv cfg job work ownPath =
         "/tmp",
         "--setenv",
         "HOME",
-        "/work"
+        "/work",
+        -- Without a locale GHC decodes text as ASCII, and the CLI dies on a
+        -- non-ASCII byte in a header's comments.
+        "--setenv",
+        "LANG",
+        "C.UTF-8"
       ]
         ++ storeBindArgs
         ++ [ "--proc",
