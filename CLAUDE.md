@@ -63,12 +63,13 @@ nix flake check                           # eval everything + run the test
   break the inner sandbox. bwrap is the real isolation boundary; the unit is defense-in-depth.
 - **Coloured diagnostics via `--color always`**: the CLI's `--color WHEN` global option
   (`always`/`auto`/`never`, from hs-bindgen PR #2167) forces ANSI escapes regardless of
-  whether stderr is a terminal, so we just capture stderr off a plain pipe (`runCapture` in
+  whether stderr is a terminal, so we just capture it off a plain pipe (`runCapture` in
   `Main.hs`) and `app.js` parses the SGR escapes into `.ansi-*` spans. This replaced an
   earlier PTY hack (`ansi-terminal` only emits colour on a tty).
-- **Never give the CLI a closed stdout** (`NoStream` in `runCapture`): with fd 1 closed it
-  hangs on its error path, so every failed generation stalls until the timeout kills it.
-  `/dev/null` is fine; see the comment there.
+- **The CLI's stdout and stderr share one pipe** (`runCapture`): it writes diagnostics to
+  stderr but its fatal errors to stdout, which the UI would otherwise never show. Never
+  give it a closed stdout (`NoStream`): with fd 1 closed it hangs on its error path, so
+  every failed generation stalls until the timeout kills it.
 - **The sandbox sets `LANG=C.UTF-8`**: `--clearenv` leaves no locale, GHC then decodes
   as ASCII, and the CLI dies reading `clang -E -C` output on a non-ASCII byte in a
   header's comments.

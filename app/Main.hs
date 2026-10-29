@@ -68,6 +68,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
+    createPipe,
     createProcess,
     proc,
     readProcessWithExitCode,
@@ -442,8 +443,8 @@ runGenerate cfg job =
     TIO.writeFile (work </> "input.h") (jobSource job)
     ownPath <- getEnv "PATH"
     let sandboxArgs = buildArgv cfg job work ownPath
-    -- Capture stderr, where the CLI writes diagnostics; @--color always@ (in
-    -- 'cliArgs') forces the ANSI escapes even though stderr is a plain pipe.
+    -- @--color always@ (in 'cliArgs') forces the ANSI escapes even though
+    -- stderr is a plain pipe.
     (ec, out) <- runCapture "timeout" sandboxArgs
     haveOut <- doesFileExist outFile
     bindings <- if haveOut then TIO.readFile outFile else pure ""
@@ -454,7 +455,7 @@ runGenerate cfg job =
         { resOutcome = outcome,
           resBindings = truncateText maxBindings bindings,
           resCommand = displayCommand job,
-          resDiagnostics = trimLines (annotate outcome out),
+          resDiagnostics = trimLines (annotate outcome code out),
           resExitCode = code
         }
   where
@@ -464,12 +465,17 @@ runGenerate cfg job =
     classify (ExitFailure n) _
       | n == -9 || n == 137 = TimedOut
       | otherwise = Failed
-    annotate TimedOut d =
+    annotate TimedOut _ d =
       d
         <> "\n[playground] Killed: exceeded the "
         <> tshow (cfgTimeoutSecs cfg)
         <> "s time limit."
-    annotate _ d = d
+    annotate Failed code d
+      | T.null (T.strip d) =
+          "[playground] hs-bindgen-cli failed with exit code "
+            <> tshow code
+            <> " and printed nothing."
+    annotate _ _ d = d
 
 -- | Arguments to @timeout@, chaining @timeout → prlimit → bwrap → hs-bindgen-cli@.
 buildArgv :: Config -> Job -> FilePath -> String -> [String]
@@ -532,29 +538,28 @@ buildArgv cfg job work ownPath =
              "/work"
            ]
 
--- | Run @cmd args@ capturing its stderr (where the CLI writes diagnostics),
--- decoded leniently as UTF-8. Reading stderr to EOF before reaping avoids a
--- full-pipe deadlock.
+-- | Run @cmd args@ capturing its stdout and stderr through one pipe, in the
+-- order it writes them, decoded leniently as UTF-8. The CLI writes diagnostics
+-- to stderr but its fatal errors to stdout. Reading the pipe to EOF before
+-- reaping avoids a full-pipe deadlock.
 --
--- Stdin\/stdout go to @\/dev\/null@ rather than 'NoStream', which would *close*
--- the child's fd 1: with stdout closed the CLI hangs on its error path, so every
--- failed generation would stall until 'cfgTimeoutSecs' kills it.
+-- Stdin goes to @\/dev\/null@. Never use 'NoStream' for stdout, which would
+-- *close* the child's fd 1: with stdout closed the CLI hangs on its error path,
+-- so every failed generation would stall until 'cfgTimeoutSecs' kills it.
 runCapture :: String -> [String] -> IO (ExitCode, Text)
 runCapture cmd args = do
   -- 'UseHandle' closes these in the parent once the child holds them.
   devNullIn <- openFile "/dev/null" ReadMode
-  devNullOut <- openFile "/dev/null" WriteMode
-  (_, _, mErr, ph) <-
+  (readEnd, writeEnd) <- createPipe
+  (_, _, _, ph) <-
     createProcess
       (proc cmd args)
         { std_in = UseHandle devNullIn,
-          std_out = UseHandle devNullOut,
-          std_err = CreatePipe,
+          std_out = UseHandle writeEnd,
+          std_err = UseHandle writeEnd,
           close_fds = True
         }
-  out <- case mErr of
-    Just hErr -> TE.decodeUtf8With lenientDecode <$> BS.hGetContents hErr
-    Nothing -> pure ""
+  out <- TE.decodeUtf8With lenientDecode <$> BS.hGetContents readEnd
   ec <- waitForProcess ph
   pure (ec, out)
 
